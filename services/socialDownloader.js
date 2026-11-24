@@ -1,4 +1,6 @@
 import { join } from 'node:path';
+import {postGate,postError,fallbackPost} from '../core/instagramPostPolicy.js';
+import {apiDirectPost,postFetcher} from './instagramPostProvider.js';
 import { galleryFiles } from './galleryDownloader.js';
 import { stat,rename,unlink,readdir,rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -154,7 +156,10 @@ export function instagramPublicItems(html,shortcode){
     const sidecar=post.edge_sidecar_to_children?.edges;
     const carousel=post.__typename==='GraphSidecar'||post.media_type===8||Array.isArray(sidecar)||Array.isArray(post.carousel_media);
     const nodes=carousel?(Array.isArray(sidecar)?sidecar.map(e=>e?.node):post.carousel_media):[post];
-    if(!Array.isArray(nodes)||!nodes.length||nodes.length>MAX_ITEMS)return [];
+    if(!Array.isArray(nodes)||!nodes.length)return [];
+    if(nodes.length>MAX_ITEMS)throw new DownloadError('size','La publicación supera los 20 archivos.');
+    const declared=post.edge_sidecar_to_children?.count??post.carousel_media_count;
+    if(carousel&&Number.isSafeInteger(declared)&&declared!==nodes.length)return [];
     const result=[];
     for(const node of nodes){
         if(!node||node.is_private===true||node.owner?.is_private===true||node.user?.is_private===true)return [];
@@ -287,7 +292,78 @@ async function localVideo(input,kind,dir,limit,runner,end,remux=false){
     if(!/^download\.[a-z0-9]{1,8}$/i.test(path.slice(dir.length+1))||!path.startsWith(dir+'/')&&!path.startsWith(dir+'\\'))throw notAvailable();
     return normalizeSocialFile(path,kind,dir,{limit,runner,end,remux});
 }
-export async function withSocialDownload(platform,query,{kind='video',position}={},consume,{runner=run,fetcher=fetch,limit=maxInputBytes,gallery=true}={}){
+// Separate orchestration for Instagram posts only. All selected files must
+// be prepared before sending; a provider cannot be retried after delivery.
+async function prepareInstagram(input,dir,end,position,{runner,fetcher,limit,gate,provider,key}){
+    gate.check();
+    const guarded=postFetcher(fetcher);
+    const fromUrls=async items=>{
+        if(!Array.isArray(items)||!items.length)throw notAvailable();
+        const chosen=selectItems(items,position,MAX_ITEMS);
+        const valid=chosen.map(i=>({...i,url:mediaUrl('instagram',i.url)}));
+        const result=[];let bytes=0;
+        for(const [index,item] of valid.entries()){
+            const left=limit-bytes;
+            if(left<=0)throw new DownloadError('size','La publicación supera el límite de tamaño.');
+            const source=join(dir,'ig-source-'+index);
+            await downloadSocialFile(item.url,source,v=>mediaUrl('instagram',v),{limit:left,fetcher:guarded,signal:AbortSignal.timeout(remaining(end,25000))});
+            const file=await normalizeSocialFile(source,item.kind,dir,{limit:left,runner,end,index});
+            bytes+=file.bytes;result.push(file);
+            await unlink(source).catch(()=>{});
+        }
+        return result;
+    };
+    const fromGallery=async()=>{
+        const raw=await galleryFiles('instagram',input.url,join(dir,'gallery'),'post',{runner,limit,timeout:remaining(end,45000)});
+        const chosen=selectItems(raw,position,MAX_ITEMS);
+        const result=[];let bytes=0;
+        for(const [index,item] of chosen.entries()){
+            const file=await normalizeSocialFile(item.path,item.kind,dir,{limit:limit-bytes,runner,end,index});
+            bytes+=file.bytes;result.push(file);
+        }
+        return result;
+    };
+    const fromBK9=async()=>{
+        let last=notAvailable();
+        for(const endpoint of ['instagram','instagram2']){
+            try{
+                const items=instagramItems(await jsonAt('https://api.bk9.dev/download/'+endpoint+'?url='+encodeURIComponent(input.url),'api.bk9.dev',end,guarded));
+                if(!items.length)throw notAvailable();
+                return await fromUrls(items);
+            }catch(error){
+                last=postError(error);
+                if(!fallbackPost(last))throw last;
+                // Nothing was sent; erase failed attempt before the next endpoint.
+                for(const name of await readdir(dir))await rm(join(dir,name),{recursive:true,force:true});
+            }
+        }
+        throw last;
+    };
+    const candidates=[
+        ['public_embed',async()=>fromUrls(await instagramEmbed(input,end,guarded))],
+        ['gallery-dl',fromGallery],
+        ['BK9',fromBK9]
+    ];
+    if(provider==='apidirect')candidates.unshift(['apidirect',async()=>fromUrls(await apiDirectPost(input,{key,fetcher:guarded,timeout:remaining(end,12000)}))]);
+    let last=notAvailable();
+    for(const [name,attempt] of candidates){
+        gate.check();
+        try{
+            const prepared=await attempt();
+            console.info('Instagram post proveedor '+JSON.stringify({provider:name,items:prepared.length}));
+            return {prepared,provider:name};
+        }catch(error){
+            last=postError(error);
+            gate.observe(last);
+            console.info('Instagram post proveedor fallido '+JSON.stringify({provider:name,reason:last.code,...(last.code==='remote_limit'?{retryAfterMs:last.retryAfterMs||0}:{})}));
+            for(const filename of await readdir(dir))await rm(join(dir,filename),{recursive:true,force:true});
+            if(!fallbackPost(last))throw last;
+        }
+    }
+    throw new DownloadError('unavailable','No se pudo obtener la publicación completa de Instagram.');
+}
+
+export async function withSocialDownload(platform,query,{kind='video',position}={},consume,{runner=run,fetcher=fetch,limit=maxInputBytes,gallery=true,instagramGate=postGate,instagramProvider=process.env.INSTAGRAM_POST_PROVIDER||'local',instagramKey=process.env.APIDIRECT_API_KEY}={}){
     const initial=socialUrl(platform,query);
     return withTemp(async dir=>{
         const end=Date.now()+deadlineMs,start=Date.now();
@@ -302,8 +378,18 @@ export async function withSocialDownload(platform,query,{kind='video',position}=
             }
             stage='provider';
             if(platform==='instagram'&&kind==='video'&&input.photo)throw new DownloadError('input','Utiliza #post para publicaciones de Instagram.');
+            if(platform==='instagram'&&kind==='post'&&gallery){
+                const result=await prepareInstagram(input,dir,end,position,{runner,fetcher,limit,gate:instagramGate,provider:instagramProvider,key:instagramKey});
+                total=result.prepared.length;stage='send';
+                for(const [index,item] of result.prepared.entries()){
+                    try{await consume(item,index,total);}catch{throw new DownloadError('send','No se pudo enviar el archivo a WhatsApp.');}
+                    sent++;
+                }
+                console.info('Red social descarga completada '+JSON.stringify({platform,kind,provider:result.provider,items:sent,ms:Date.now()-start}));
+                return {sent,total};
+            }
             let items;
-            const useGallery=gallery&&(platform==='pinterest'||platform==='instagram'&&kind==='post'||platform==='tiktok'&&(input.photo||input.short));
+            const useGallery=gallery&&(platform==='pinterest'||platform==='tiktok'&&(input.photo||input.short));
             if(useGallery){
                 let prepared;
                 try{
