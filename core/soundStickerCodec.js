@@ -64,7 +64,7 @@ let active=false;
 export function initializeSoundStickers(){
     if(process.env.EXPERIMENTAL_SOUND_STICKERS!=='true') return false;
     active=installSoundStickerCodec();
-    console.log(active?'Stickers con audio: codec experimental habilitado (solo chats privados para envío)':'Stickers con audio: codec incompatible; prueba desactivada');
+    console.log(active?'Stickers con audio: codec experimental habilitado (chats privados y grupos)':'Stickers con audio: codec incompatible; prueba desactivada');
     return active;
 }
 export const soundStickersEnabled=()=>active;

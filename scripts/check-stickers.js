@@ -75,6 +75,19 @@ await withTemp(async dir=>{
     const decoded=proto.WebMessageInfo.decode(proto.WebMessageInfo.encode(sent).finish());
     assert.deepEqual(Buffer.from(decoded.message.stickerMessage.audioMessage.mediaKey),Buffer.from(audioMessage.mediaKey));
     assert.equal(decoded.message.stickerMessage.isAnimated,true);
+    // Exercise group message preparation with a quoted command from a group member.
+    const groupJid='120363000000000000@g.us';
+    const groupMessage=generateWAMessageFromContent(groupJid,{stickerMessage:proto.Message.StickerMessage.fromObject(sticker)},{
+        userJid:'456@s.whatsapp.net',
+        quoted:{key:{remoteJid:groupJid,participant:'123@lid',fromMe:false,id:'test-command'},message:{conversation:'#s'}}
+    });
+    const groupDecoded=proto.WebMessageInfo.decode(proto.WebMessageInfo.encode(groupMessage).finish());
+    assert.equal(groupDecoded.key.remoteJid,groupJid);
+    assert.equal(groupDecoded.message.stickerMessage.contextInfo.stanzaId,'test-command');
+    assert.equal(groupDecoded.message.stickerMessage.isAnimated,true);
+    assert.deepEqual(Buffer.from(groupDecoded.message.stickerMessage.audioMessage.mediaKey),Buffer.from(audioMessage.mediaKey));
+    assert.equal(groupDecoded.message.stickerMessage.audioMessage.directPath,audioMessage.directPath);
+    console.log('Group and private sticker payloads preserve sound offline');
     assert.equal(proto.Message.StickerMessage.decode(proto.Message.StickerMessage.encode({width:512}).finish()).audioMessage,undefined);
     const soundVideo=await convertWebp(animated.path,await sub('sound-video'),{audioPath:clip.path});
     const streams=(await inspectMedia(soundVideo.path)).streams;
