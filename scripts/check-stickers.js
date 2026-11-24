@@ -9,6 +9,7 @@ import {createSticker,convertWebp,inspectMedia,extractAudio,LIMITS,stickerExif} 
 import {saveBoundedStream,downloadToFile} from '../services/mediaDownload.js';
 import {proto,generateWAMessageContent,generateWAMessageFromContent} from 'baileys';
 import {installSoundStickerCodec,soundCodecAvailable} from '../core/soundStickerCodec.js';
+import {stationaryWebp} from '../core/stationaryWebp.js';
 import {prepareStickerAudio,uploadStickerAudio} from '../services/stickerSound.js';
 
 await withTemp(async dir=>{
@@ -116,7 +117,23 @@ await withTemp(async dir=>{
     const stationarySticker=await createSticker(stationary,await sub('stationary'),{kind:'video'});
     assert.equal(stationarySticker.animated,true);
     assert.ok(Math.abs(stationarySticker.durationMs-3000)<100);
-    assert.ok(await prepareStickerAudio(stationary,await sub('stationary-audio'),stationarySticker.durationMs));
+    const stationaryMeta=await sharp(stationarySticker.path,{animated:true}).metadata();
+    assert.equal(stationaryMeta.pages,2);
+    assert.deepEqual(stationaryMeta.delay,[1500,1500]);
+    assert.equal(stationaryMeta.width,512);assert.equal(stationaryMeta.pageHeight,512);
+    assert.ok(stationaryMeta.exif.includes(Buffer.from('UntrueBot')));
+    const stationaryClip=await prepareStickerAudio(stationary,await sub('stationary-audio'),stationarySticker.durationMs);
+    assert.ok(stationaryClip.durationMs>=2900);
+    const stationaryRecovered=await convertWebp(stationarySticker.path,await sub('stationary-recovery'),{audioPath:stationaryClip.path});
+    const stationaryProbe=await inspectMedia(stationaryRecovered.path);
+    for(const kind of ['video','audio']) assert.ok(Number(stationaryProbe.streams.find(s=>s.codec_type===kind).duration)>=2.9);
+    const alphaFrame=await sharp({create:{width:512,height:512,channels:4,background:{r:200,g:10,b:10,alpha:0.5}}}).webp().toBuffer();
+    const alphaAnimation=stationaryWebp(alphaFrame,{width:512,height:512,durationMs:15000,exif:stickerExif()});
+    const alphaMeta=await sharp(alphaAnimation,{animated:true}).metadata();
+    assert.equal(alphaMeta.pages,2);assert.equal(alphaMeta.hasAlpha,true);
+    assert.deepEqual(alphaMeta.delay,[7500,7500]);
+    const rgba=await sharp(alphaAnimation).ensureAlpha().raw().toBuffer();
+    assert.ok(rgba[3]>0&&rgba[3]<255);
     console.log('Full 8/10/15-second audio, detailed fallback, high FPS and batched recovery verified');
     const clip=await prepareStickerAudio(video,await sub('sound'),animated.durationMs);
     assert.ok(clip);

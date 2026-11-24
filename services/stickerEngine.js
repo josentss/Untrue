@@ -5,6 +5,7 @@ import { stat,writeFile } from 'node:fs/promises';
 import { run } from '../core/process.js';
 import { ffmpeg,ffprobe } from '../core/config.js';
 import { MediaError } from '../core/mediaTarget.js';
+import { stationaryWebp } from '../core/stationaryWebp.js';
 
 export const LIMITS=Object.freeze({size:512,staticBytes:100*1024,animatedBytes:500*1024,durationMs:15000,frames:450,pixels:48*1024*1024,animationPixels:120*1024*1024});
 const transparent={r:0,g:0,b:0,alpha:0};
@@ -138,9 +139,13 @@ export async function createSticker(input,dir,{kind,crop=true}={}) {
                 animated=(meta.pages||1)>1;
                 if(!animated&&duration>=0.02&&bytes*2+1024<=LIMITS.animatedBytes){
                     // libwebp collapses a still video to a static image. Preserve its timeline (and any audio) with two identical frames.
-                    const total=Math.round(duration*1000), first=Math.floor(total/2);
-                    const frames=await Promise.all([first,total-first].map(delay=>WebP.Image.generateFrame({path:encoded,delay,blend:false,dispose:false})));
-                    await WebP.Image.save(output,{width:512,height:512,loops:0,frames,exif:stickerExif()});
+                    const total=Math.round(duration*1000);
+                    // Normalize even a one-frame animated container into a truly static frame.
+                    const frame=await sharp(encoded,sharpOptions).webp({quality:Math.max(1,quality),alphaQuality:80}).toBuffer();
+                    const animation=stationaryWebp(frame,{width:512,height:512,durationMs:total,exif:stickerExif()});
+                    if(animation.length>LIMITS.animatedBytes){lastFailure='size';continue;}
+                    await writeFile(output,animation);
+                    console.info('Sticker video estacionario '+JSON.stringify({durationMs:total,bytes:animation.length}));
                     const result=await checkSticker(output,true);
                     if(result) return result;
                     lastFailure='size';continue;
