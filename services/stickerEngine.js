@@ -79,6 +79,7 @@ export async function createSticker(input,dir,{kind,name,crop=false}={}) {
         const meta=await metadata(input);
         if(!['jpeg','png','webp','gif','heif','tiff','avif'].includes(meta.format)) throw new MediaError('Formato de imagen no compatible.');
         const info=animationInfo(meta); animated=info.animated;
+        if(animated&&!['webp','gif'].includes(meta.format)) throw new MediaError('Solo GIF y WebP admiten animaciones de imagen.');
         const profiles=animated?[[78,512],[58,512],[40,448],[28,384],[15,320]]:[[88,512],[75,512],[58,512],[40,512],[25,448],[15,320]];
         for(const [quality,size] of profiles) {
             remaining(end);
@@ -101,7 +102,7 @@ export async function createSticker(input,dir,{kind,name,crop=false}={}) {
         animated=true;
         const profiles=[[15,70,512],[12,50,512],[10,35,448],[8,25,384],[8,15,320]];
         for(const [fps,quality,size] of profiles){
-            await run(ffmpeg,[...baseArgs,...inputArgs,'-i',input,'-map','0:v:0','-t',String(Math.min(duration,9.95)),'-an','-vf',videoFilter(size,fps,crop),'-c:v','libwebp_anim','-q:v',String(quality),'-compression_level','4','-loop','0','-threads','2',encoded],{timeout:remaining(end)});
+            await run(ffmpeg,[...baseArgs,...inputArgs,'-i',input,'-map','0:v:0','-t',String(Math.min(duration,9.95)),'-an','-vf',videoFilter(size,fps,crop),'-c:v','libwebp_anim','-quality',String(quality),'-compression_level','4','-loop','0','-threads','2',encoded],{timeout:remaining(end)});
             const meta=await metadata(encoded);
             // Extremely short videos may encode to a single frame; classify from actual output.
             animated=(meta.pages||1)>1;
