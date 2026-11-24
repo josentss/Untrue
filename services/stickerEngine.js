@@ -87,11 +87,6 @@ export async function createSticker(input,dir,{kind,name,crop=true}={}) {
             let image=sharp(input,animated?animatedOptions:sharpOptions);
             if(!animated) image=image.rotate();
             image=image.resize(size,size,fitOptions(crop));
-            if(size!==512) {
-                // Keep 512 canvas; sharp applies extend per page for animated images.
-                const pad=(512-size)/2;
-                image=image.extend({top:pad,bottom:pad,left:pad,right:pad,background:transparent});
-            }
             await image.webp({quality,alphaQuality:80,effort:4,...(animated?{loop:0,delay:info.delays}:{})}).toFile(encoded);
             await addExif(encoded,output,name);
             if(await checkSticker(output,animated)) return {path:output,animated,durationMs:animationInfo(await metadata(output)).durationMs};

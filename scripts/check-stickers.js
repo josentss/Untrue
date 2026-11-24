@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import sharp from 'sharp';
 import { join } from 'node:path';
-import { mkdir,stat,readFile } from 'node:fs/promises';
+import { mkdir,stat } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { withTemp,run } from '../core/process.js';
 import { ffmpeg } from '../core/config.js';
 import {createSticker,convertWebp,inspectMedia,extractAudio,LIMITS} from '../services/stickerEngine.js';
 import {saveBoundedStream,downloadToFile} from '../services/mediaDownload.js';
-import {proto,generateWAMessageFromContent} from 'baileys';
+import {proto,generateWAMessageContent,generateWAMessageFromContent} from 'baileys';
 import {installSoundStickerCodec,soundCodecAvailable} from '../core/soundStickerCodec.js';
 import {prepareStickerAudio,uploadStickerAudio} from '../services/stickerSound.js';
 
@@ -63,7 +63,12 @@ await withTemp(async dir=>{
     assert.ok(clip);
     const audioMessage=await uploadStickerAudio({waUploadToServer:async path=>{assert.ok((await stat(path)).size>0);return {mediaUrl:'https://example.invalid/a',directPath:'/a'};}},clip);
     assert.equal(audioMessage.mimetype,'audio/ogg; codecs=opus');
-    const sticker={isAnimated:true,audioMessage};
+    const logger=Object.fromEntries(['trace','debug','info','warn','error','fatal'].map(k=>[k,()=>{}]));logger.child=()=>logger;logger.level='silent';
+    const content=await generateWAMessageContent({sticker:{url:animated.path},isAnimated:true,width:512,height:512,audioMessage},{logger,upload:async path=>{assert.ok((await stat(path)).size>0);return {mediaUrl:'https://example.invalid/s',directPath:'/s'};}});
+    const sticker=content.stickerMessage;
+    assert.ok(sticker.mediaKey);
+    assert.ok(sticker.audioMessage?.mediaKey,'audio survives actual sticker upload builder');
+    assert.equal(sticker.width,512);
     const bytes=proto.Message.StickerMessage.encode(sticker).finish();
     assert.ok(Buffer.from(bytes).includes(Buffer.from([210,1])),'wire field 26');
     const sent=generateWAMessageFromContent('123@s.whatsapp.net',{stickerMessage:sticker},{userJid:'456@s.whatsapp.net'});

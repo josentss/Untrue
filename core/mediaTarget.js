@@ -20,11 +20,6 @@ export function selectMedia(message) {
     }
     throw new MediaError('Responde a una imagen, video o sticker compatible.');
 }
-export function modeOf(args, allowed) {
-    const mode = (args || []).join(' ').trim().toLowerCase();
-    if (mode && !allowed.includes(mode)) throw new MediaError('Opción desconocida. Consulta #menu.');
-    return mode;
-}
 export function soundUnavailable() {
     return new MediaError('Baileys aún no permite crear o recuperar stickers con sonido de forma fiable. Usa #toa para extraer audio de un video.');
 }
