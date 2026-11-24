@@ -15,7 +15,7 @@ import axios from 'axios';
 import Tiktok from '@tobyg74/tiktok-api-dl';
 
 const execPromise = promisify(exec);
-const ffmpegCommand = process.env.FFMPEG_PATH || 'ffmpeg';
+import { ffmpeg as ffmpegCommand } from '../core/config.js';
 const COBALT_API = (process.env.COBALT_API_URL || '').replace(/\/$/, '');
 
 function getDefaultVideoInfo() {

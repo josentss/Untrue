@@ -69,7 +69,7 @@ export async function youtubeCommand(sock, m, args) {
         console.log(`✅ Enviando video: ${info.title}`);
 
         await sock.sendMessage(jid, {
-            video: fs.readFileSync(filePath),
+            video: { url: filePath },
             caption,
             mimetype: 'video/mp4',
             fileName: `${(info.title || 'video').substring(0, 40)}.mp4`
@@ -87,7 +87,7 @@ export async function youtubeCommand(sock, m, args) {
                        '  • Una URL válida\n' +
                        '  • Menos palabras clave';
         } else if (error.message.includes('muy grande')) {
-            errorMsg += error.message;
+            errorMsg += 'El proveedor no pudo completar la solicitud.';
         } else if (error.message.includes('inválida')) {
             errorMsg += 'URL de YouTube no válida.\n\n' +
                        'Intenta con:\n' +

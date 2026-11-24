@@ -4,13 +4,15 @@ import { promisify } from 'util';
 import ffmpeg from 'fluent-ffmpeg';
 import WebP from 'node-webpmux';
 import sharp from 'sharp';
+import { randomUUID } from 'node:crypto';
+import { ffmpeg as ffmpegPath, maxInputBytes } from '../core/config.js';
 
 const { Image } = WebP;
 const writeFileAsync = promisify(writeFile);
 const unlinkAsync = promisify(unlink);
 
 function getFfmpegPath() {
-    return process.env.FFMPEG_PATH || 'ffmpeg';
+    return ffmpegPath;
 }
 
 class StickerToMediaService {
@@ -31,14 +33,17 @@ class StickerToMediaService {
             throw new Error('El mensaje no contiene un sticker');
         }
 
-        const isAnimated = m.message.stickerMessage.isAnimated || false;
+        const sticker = m.message.stickerMessage;
+        if (sticker.isLottie || sticker.audioMessage) throw Error('Formato de sticker aún no compatible');
+        if (Number(sticker.fileLength || 0) > maxInputBytes) throw Error('Sticker demasiado grande');
+        const isAnimated = sticker.isAnimated || false;
 
         const mediaBuffer = await downloadMediaMessage(m, 'buffer', {}, {
             logger: console,
             reuploadRequest: sock.updateMediaMessage
         });
 
-        if (!mediaBuffer) {
+        if (!mediaBuffer || mediaBuffer.length > maxInputBytes) {
             throw new Error('No se pudo descargar el sticker');
         }
 
@@ -49,8 +54,8 @@ class StickerToMediaService {
     }
 
     async convertStatic(stickerBuffer) {
-        const tempInput = `${this.tempDir}/sticker_${Date.now()}.webp`;
-        const tempOutput = `${this.tempDir}/image_${Date.now()}.jpg`;
+        const tempInput = `${this.tempDir}/sticker_${randomUUID()}.webp`;
+        const tempOutput = `${this.tempDir}/image_${randomUUID()}.jpg`;
 
         try {
             await writeFileAsync(tempInput, stickerBuffer);
@@ -72,6 +77,7 @@ class StickerToMediaService {
 
             return { buffer: imageBuffer, type: 'image', mimetype: 'image/jpeg' };
         } catch {
+            await this.cleanup([tempInput, tempOutput]);
             return await this.convertStaticSimple(stickerBuffer);
         }
     }
@@ -88,8 +94,8 @@ class StickerToMediaService {
                 .toFormat('gif')
                 .toBuffer();
 
-            tempGif = `${this.tempDir}/animated_${Date.now()}.gif`;
-            tempMp4 = `${this.tempDir}/video_${Date.now()}.mp4`;
+            tempGif = `${this.tempDir}/animated_${randomUUID()}.gif`;
+            tempMp4 = `${this.tempDir}/video_${randomUUID()}.mp4`;
             await writeFileAsync(tempGif, gifBuffer);
 
             await new Promise((resolve, reject) => {
@@ -133,15 +139,8 @@ class StickerToMediaService {
     }
 
     async convertStaticSimple(stickerBuffer) {
-        const tempFile = `${this.tempDir}/simple_${Date.now()}.webp`;
-        await writeFileAsync(tempFile, stickerBuffer);
-
-        const img = new Image();
-        await img.load(tempFile);
-        const frameBuffer = await img.frames[0].toBuffer('image/png');
-        await this.cleanup([tempFile]);
-
-        return { buffer: frameBuffer, type: 'image', mimetype: 'image/png' };
+        const buffer = await sharp(stickerBuffer).png().toBuffer();
+        return { buffer, type: 'image', mimetype: 'image/png' };
     }
 
     async cleanup(files) {
@@ -162,6 +161,7 @@ export async function stickerToMediaCommand(sock, m) {
         if (m.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
             target = {
                 ...m,
+                key: { remoteJid: m.key.remoteJid, id: m.message.extendedTextMessage.contextInfo.stanzaId, participant: m.message.extendedTextMessage.contextInfo.participant },
                 message: m.message.extendedTextMessage.contextInfo.quotedMessage
             };
         }

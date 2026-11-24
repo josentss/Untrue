@@ -1,44 +1,12 @@
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import fs from 'fs';
-import path from 'path';
-
-const execPromise = promisify(exec);
-const YT_DLP = '/usr/local/bin/yt-dlp';
-
-export async function scCommand(sock, m, args) {
-    const remoteJid = m.key.remoteJid;
-
-    if (!args || args.length === 0) {
-        return sock.sendMessage(remoteJid, {
-            text: "Uso correcto:\n#sc [artista] [canción]\n#sc [link]"
-        }, { quoted: m });
-    }
-
-    const query = args.join(' ');
-    const isUrl = query.startsWith('http');
-    const input = isUrl ? `"${query}"` : `scsearch1:"${query}"`;
-    const tempFilePath = path.join('./temp', `sc_${Date.now()}.mp3`);
-
+import { platformUrl } from '../core/urls.js';
+import { sendLocalDownload } from '../services/localDownloader.js';
+export async function scCommand(sock,m,args) {
     try {
-        const dlCommand = `"${YT_DLP}" -x --audio-format mp3 --audio-quality 128K --no-check-certificate -o "${tempFilePath}" ${input}`;
-        await execPromise(dlCommand);
-
-        if (!fs.existsSync(tempFilePath)) {
-            throw new Error("No se pudo crear el archivo.");
-        }
-
-        await sock.sendMessage(remoteJid, {
-            audio: fs.readFileSync(tempFilePath),
-            mimetype: 'audio/mpeg',
-            ptt: false
-        }, { quoted: m });
-
-    } catch (error) {
-        await sock.sendMessage(remoteJid, { text: "Error al descargar. Intenta de nuevo." }, { quoted: m });
-    } finally {
-        if (fs.existsSync(tempFilePath)) {
-            try { fs.unlinkSync(tempFilePath); } catch (e) {}
-        }
+        const q = args.join(' ').trim();
+        if (!q || q.length > 300) throw Error('Uso: #sc [enlace/búsqueda]');
+        const input = /^https?:/i.test(q) ? platformUrl(q,["soundcloud.com"]) : 'scsearch1:' + q;
+        await sendLocalDownload(sock,m,input,{audio:true});
+    } catch {
+        await sock.sendMessage(m.key.remoteJid,{text:'No se pudo descargar. Comprueba el enlace público e inténtalo nuevamente.'},{quoted:m});
     }
 }

@@ -1,63 +1,19 @@
-FROM node:20-slim
-
-# dependencias importantes
-RUN apt update && apt install -y --no-install-recommends \
-    git \
-    build-essential \
-    python3 \
-    libcairo2-dev \
-    libpango1.0-dev \
-    libjpeg-dev \
-    libgif-dev \
-    libfreetype6-dev \
-    librsvg2-dev \
-    ffmpeg \
-    wget \
-    ca-certificates \
-    libreoffice \
-    imagemagick \
-    ghostscript \
-    fonts-freefont-ttf \
-    default-jre-headless \
-    curl \
-    ca-certificates \
-    libopus0 \
-    libvpx7 \
-    && rm -rf /var/lib/apt/lists/*
-
-# yt-dlp actualizado
-RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
-      -o /usr/local/bin/yt-dlp && \
-    chmod a+rx /usr/local/bin/yt-dlp && \
-    yt-dlp --version
-
-# symlinks para compatibilidad
-RUN mkdir -p /home/runner/workspace/.pythonlibs/bin && \
-    mkdir -p /home/runner/workspace/node_modules/ffmpeg-static && \
-    ln -sf /usr/bin/ffmpeg /home/runner/workspace/node_modules/ffmpeg-static/ffmpeg && \
-    ln -sf /usr/bin/ffmpeg /usr/local/bin/ffmpeg
-
-# políticas de imagemagick para permitir pdf
-RUN POLICY_FILE=$(find /etc/ImageMagick-* -name policy.xml | head -n 1) ; \
-    if [ ! -z "$POLICY_FILE" ]; then \
-        sed -i '/<policy domain="coder" rights="none" pattern="PDF" \/>/d' "$POLICY_FILE" ; \
-        sed -i '/<policy domain="coder" rights="none" pattern="LABEL" \/>/d' "$POLICY_FILE" ; \
-    fi
-
+FROM node:22-bookworm-slim
+ENV NODE_ENV=production
+ARG YTDLP_VERSION=
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ca-certificates curl python3 python3-venv build-essential pkg-config \
+    libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev \
+    ffmpeg libreoffice-core libreoffice-writer libreoffice-calc imagemagick poppler-utils fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/yt-dlp \
+    && if [ -n "$YTDLP_VERSION" ]; then /opt/yt-dlp/bin/pip install --no-cache-dir "yt-dlp[default]==$YTDLP_VERSION"; else /opt/yt-dlp/bin/pip install --no-cache-dir "yt-dlp[default]"; fi \
+    && ln -s /opt/yt-dlp/bin/yt-dlp /usr/local/bin/yt-dlp \
+    && yt-dlp --version && ffmpeg -version
 WORKDIR /app
-
 COPY package*.json ./
-
-RUN npm install
-
+RUN npm ci --omit=dev
 COPY . .
-
-RUN mkdir -p sessions temp logs assets /tmp && \
-    chmod -R 777 /tmp
-
+ENV FFMPEG_PATH=/usr/bin/ffmpeg FFPROBE_PATH=/usr/bin/ffprobe YTDLP_PATH=/usr/local/bin/yt-dlp
 EXPOSE 3000
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:3000/health || exit 1
-
-CMD ["npm", "start"]
+CMD ["node", "index.js"]

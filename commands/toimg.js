@@ -102,6 +102,7 @@ async function checkDependencies() {
     try {
         await execPromise(`${LIBREOFFICE} --version`);
         await execPromise(`${CONVERT} --version`);
+        await execPromise("pdftoppm -v");
     } catch {
         throw new Error('LibreOffice o ImageMagick no están disponibles en este servidor');
     }
@@ -132,11 +133,11 @@ async function convertToImages(docPath, outDir, ext) {
 
 async function convertPdf(pdfPath, outDir) {
     const outPattern = join(outDir, 'page-%03d.png');
-    await execPromise(`"${CONVERT}" -density 150 "${pdfPath}" -quality 90 "${outPattern}"`, { timeout: 60000 });
+    await execPromise(`pdftoppm -f 1 -l 20 -r 150 -png "${pdfPath}" "${join(outDir, "page")}"`, { timeout: 60000 });
 
     return readdirSync(outDir)
         .filter(f => f.startsWith('page-') && f.endsWith('.png'))
-        .sort()
+        .sort((a,b) => a.localeCompare(b, undefined, {numeric:true}))
         .map(f => join(outDir, f));
 }
 

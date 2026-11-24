@@ -1,3 +1,4 @@
+import { ffmpeg as ffmpegPath } from '../core/config.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { unlinkSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
@@ -8,7 +9,7 @@ import { downloadContentFromMessage } from '@whiskeysockets/baileys';
 const execPromise = promisify(exec);
 
 function getFfmpegPath() {
-    return process.env.FFMPEG_PATH || 'ffmpeg';
+    return ffmpegPath;
 }
 
 export async function toAudioCommand(sock, m) {

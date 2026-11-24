@@ -3,15 +3,16 @@ import fs from 'fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { promisify } from 'util';
-import { exec } from 'child_process';
+import { run } from '../core/process.js';
+import { ffmpeg, maxInputBytes } from '../core/config.js';
+import { randomUUID } from 'node:crypto';
 import WebP from 'node-webpmux';
 
 const { Image: WebpMuxImage } = WebP;
-const execPromise = promisify(exec);
+
 
 function getFfmpegPath() {
-    return process.env.FFMPEG_PATH || 'ffmpeg';
+    return ffmpeg;
 }
 
 function cleanUp(...files) {
@@ -52,11 +53,10 @@ async function injectMetadata(inputPath, outputPath, m) {
 
 async function convertVideo(input, output, { fps, duration, quality, resolution }) {
     const ffmpeg = getFfmpegPath();
-    const filter = `scale=${resolution}:${resolution}:force_original_aspect_ratio=increase,crop=${resolution}:${resolution},fps=${fps}`;
-    const cmd = `${ffmpeg} -y -i "${input}" -t ${duration} -vcodec libwebp -vf "${filter}" -loop 0 -lossless 0 -compression_level 4 -q:v ${quality} -preset default -an -vsync 0 "${output}"`;
+    const filter = `scale=${resolution}:${resolution}:force_original_aspect_ratio=decrease,pad=${resolution}:${resolution}:(ow-iw)/2:(oh-ih)/2:color=black@0,fps=${fps}`;
 
     try {
-        await execPromise(cmd, { maxBuffer: 50 * 1024 * 1024 });
+        await run(ffmpeg, ['-y','-i',input,'-t',String(duration),'-vcodec','libwebp','-vf',filter,'-loop','0','-lossless','0','-compression_level','4','-q:v',String(quality),'-an',output], { timeout:60000 });
         if (!fs.existsSync(output)) return { success: false, size: 0 };
         return { success: true, size: fs.statSync(output).size / 1024 };
     } catch {
@@ -66,7 +66,7 @@ async function convertVideo(input, output, { fps, duration, quality, resolution 
 
 export async function mediaToStickerCommand(sock, m) {
     const jid = m.key.remoteJid;
-    const quoted = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+    const quoted = m.message?.extendedTextMessage?.contextInfo?.quotedMessage || m.message;
 
     if (!quoted) {
         await sock.sendMessage(jid, { text: 'Responde a una imagen o video.' }, { quoted: m });
@@ -89,14 +89,15 @@ export async function mediaToStickerCommand(sock, m) {
 
 async function processImage(sock, m, imageMessage) {
     const jid = m.key.remoteJid;
-    const tempIn = join(tmpdir(), `img-${Date.now()}.jpg`);
-    const tempWebp = join(tmpdir(), `img-${Date.now()}.webp`);
-    const finalWebp = join(tmpdir(), `sticker-${Date.now()}.webp`);
+    const tempIn = join(tmpdir(), `img-${randomUUID()}.jpg`);
+    const tempWebp = join(tmpdir(), `img-${randomUUID()}.webp`);
+    const finalWebp = join(tmpdir(), `sticker-${randomUUID()}.webp`);
 
     try {
         const stream = await downloadContentFromMessage(imageMessage, 'image');
         const chunks = [];
-        for await (const c of stream) chunks.push(c);
+        let bytes = 0;
+        for await (const c of stream) { bytes += c.length; if (bytes > maxInputBytes) throw Error('Archivo demasiado grande'); chunks.push(c); }
         fs.writeFileSync(tempIn, Buffer.concat(chunks));
 
         await sharp(tempIn)
@@ -105,6 +106,7 @@ async function processImage(sock, m, imageMessage) {
             .toFile(tempWebp);
 
         await injectMetadata(tempWebp, finalWebp, m);
+        if (fs.statSync(finalWebp).size > 1024 * 1024) throw Error('Sticker demasiado grande');
         await sock.sendMessage(jid, { sticker: fs.readFileSync(finalWebp) }, { quoted: m });
     } finally {
         cleanUp(tempIn, tempWebp, finalWebp);
@@ -113,21 +115,22 @@ async function processImage(sock, m, imageMessage) {
 
 async function processVideo(sock, m, videoMessage) {
     const jid = m.key.remoteJid;
-    const duration = videoMessage.seconds || 0;
+    const duration = Number(videoMessage.seconds) || 15;
 
     if (duration > 15) {
         await sock.sendMessage(jid, { text: 'Máximo 15 segundos.' }, { quoted: m });
         return;
     }
 
-    const tempIn = join(tmpdir(), `vid-${Date.now()}.mp4`);
-    const tempWebp = join(tmpdir(), `vid-${Date.now()}.webp`);
-    const finalWebp = join(tmpdir(), `sticker-${Date.now()}.webp`);
+    const tempIn = join(tmpdir(), `vid-${randomUUID()}.mp4`);
+    const tempWebp = join(tmpdir(), `vid-${randomUUID()}.webp`);
+    const finalWebp = join(tmpdir(), `sticker-${randomUUID()}.webp`);
 
     try {
         const stream = await downloadContentFromMessage(videoMessage, 'video');
         const chunks = [];
-        for await (const c of stream) chunks.push(c);
+        let bytes = 0;
+        for await (const c of stream) { bytes += c.length; if (bytes > maxInputBytes) throw Error('Archivo demasiado grande'); chunks.push(c); }
         fs.writeFileSync(tempIn, Buffer.concat(chunks));
 
         let fps = duration < 5 ? 20 : duration > 10 ? 12 : 15;

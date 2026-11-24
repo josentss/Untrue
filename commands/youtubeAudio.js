@@ -65,9 +65,7 @@ export async function youtubeAudioCommand(sock, m, args, format = 'mp3') {
                   'Uso:\n' +
                   '  #yta <URL>\n' +
                   '  #yta <búsqueda>\n\n' +
-                  'Formatos disponibles:\n' +
-                  '  #yta-mp3 <búsqueda> (MP3)\n' +
-                  '  #yta-m4a <búsqueda> (M4A)\n\n' +
+                  '  #yta <búsqueda> (MP3)\n\n' +
                   'Ejemplos:\n' +
                   '  #yta bad bunny tití\n' +
                   '  #yta https://www.youtube.com/watch?v=...'
@@ -76,10 +74,6 @@ export async function youtubeAudioCommand(sock, m, args, format = 'mp3') {
     }
 
     try {
-        const ffmpegAvailable = await checkFFmpegAvailable();
-        if (!ffmpegAvailable) {
-            throw new Error('FFmpeg no está instalado en el servidor');
-        }
 
         const statusMsg = await sock.sendMessage(jid, {
             text: `⏳ Descargando audio (${format.toUpperCase()})...\n\n_Buscando y procesando..._`
@@ -111,7 +105,7 @@ export async function youtubeAudioCommand(sock, m, args, format = 'mp3') {
         console.log(`✅ Enviando audio: ${info.title}`);
 
         await sock.sendMessage(jid, {
-            audio: fs.readFileSync(filePath),
+            audio: { url: filePath },
             mimetype: getMimetype(ext),
             fileName: `${(info.title || 'audio').substring(0, 40)}.${ext}`,
             ptt: false
@@ -144,7 +138,7 @@ export async function youtubeAudioCommand(sock, m, args, format = 'mp3') {
             errorMsg += 'Servidor no configurado correctamente.\n' +
                        'Reporta esto al administrador';
         } else {
-            errorMsg += error.message;
+            errorMsg += 'El proveedor no pudo completar la solicitud.';
         }
 
         await sock.sendMessage(jid, {

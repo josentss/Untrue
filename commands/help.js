@@ -11,20 +11,19 @@ export async function helpCommand(sock, m) {
 • #tta [link] — Audio de TikTok
 • #ytv [link/búsqueda] — Video de YouTube
 • #yta [link/búsqueda] — Audio de YouTube
+• #ytinfo [link/búsqueda] — Información de YouTube
 • #reel [link] — Reel de Instagram
 • #post [link] — Post/carrusel de Instagram
 • #fb [link] — Facebook
 • #tw [link] — Twitter/X
 • #pin [link] — Pinterest
 • #sc [link/búsqueda] — SoundCloud
-• #cover [álbum] — Portada de álbum
 
 *Utilidades*
 • #bcv — Tasa BCV
 • #usdt — Precio USDT
 • #qr [texto] — Generar QR
 • #traducir [idioma] — Traducir texto
-• #todos — Mencionar a todos
 
 *Convertidores*
 • #s — Crear sticker
