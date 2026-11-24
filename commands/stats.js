@@ -1,3 +1,4 @@
+import { isOwner, senderIdentity } from '../core/identity.js';
 class StatsManager {
     constructor() {
         this.startTime = new Date();
@@ -34,16 +35,13 @@ class StatsManager {
 const statsManager = new StatsManager();
 const CREATOR_ID = process.env.BOT_OWNER_JID;
 
-function isCreator(userId, participant = null) {
-    return Boolean(CREATOR_ID && (participant || userId) === CREATOR_ID);
-}
 
 export async function statsCommand(sock, m, args) {
     const remoteJid = m.key.remoteJid;
     const participant = m.key.participant;
 
     try {
-        if (!isCreator(remoteJid, participant)) {
+        if (!isOwner(m.key, CREATOR_ID)) {
             await sock.sendMessage(remoteJid, {
                 text: 'Este comando solo está disponible para el creador.'
             }, { quoted: m });
@@ -64,7 +62,7 @@ export async function statsCommand(sock, m, args) {
 
         await sock.sendMessage(remoteJid, { text }, { quoted: m });
 
-        const userToRecord = participant || remoteJid;
+        const userToRecord = senderIdentity(m.key) || participant || remoteJid;
         statsManager.recordCommand('stats', userToRecord);
 
     } catch (error) {

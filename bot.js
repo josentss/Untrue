@@ -1,13 +1,17 @@
-import { makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore, DisconnectReason } from '@whiskeysockets/baileys';
+import { makeWASocket, makeCacheableSignalKeyStore, DisconnectReason, BufferJSON, initAuthCreds, proto } from 'baileys';
 import QRCode from 'qrcode-terminal';
 import Pino from 'pino';
 import NodeCache from 'node-cache';
-import { mkdir } from 'node:fs/promises';
+import { openAuthStore } from './core/authStore.js';
+import { createProtocolLogger } from './core/protocolLogger.js';
+import { messageKeys } from './core/identity.js';
 import { authDir, maxJobs } from './core/config.js';
-import { normalizedMessage, commandOf, messageKey, RecentKeys } from './core/messages.js';
+import { normalizedMessage, commandOf, RecentKeys } from './core/messages.js';
 import { JobQueue } from './core/queue.js';
 
 const logger = Pino({ level: process.env.LOG_LEVEL || 'info', redact: ['key.remoteJid', 'key.participant', 'msgAttrs.from', 'msgAttrs.participant', 'qr'] });
+const protocolLogger = createProtocolLogger(logger, {level:process.env.BAILEYS_LOG_LEVEL || 'warn'});
+const summaryTimer = setInterval(() => protocolLogger.flush(), 60000); summaryTimer.unref();
 const seen = new RecentKeys();
 const retryCache = new NodeCache({ stdTTL: 600, maxKeys: 10000, useClones: false, checkperiod: 60 });
 const sentCache = new NodeCache({ stdTTL: 600, maxKeys: 1000, useClones: false, checkperiod: 60 });
@@ -16,6 +20,8 @@ const lightweight = new Set(['ping', 'menu', 'help', 'info', 'stats', 'bcv', 'us
 let socket, timer, connecting = false, stopping = false, attempts = 0, status = 'starting';
 let pendingCredentials = Promise.resolve();
 let generation = 0;
+let currentAuth;
+let authFailed = false;
 export const connectionStatus = () => status;
 function retry(immediate = false) {
     if (stopping || timer) return;
@@ -23,34 +29,40 @@ function retry(immediate = false) {
     timer = setTimeout(() => { timer = undefined; void connectToWhatsApp(); }, delay);
 }
 function cacheMessage(message) {
-    const key = messageKey(message?.key);
-    if (!key || !message.message || sentCache.getStats().keys >= 1000) return;
-    sentCache.set(key, message.message);
+    if (!message?.message) return;
+    for (const key of messageKeys(message.key)) {
+        if (sentCache.getStats().keys >= 1000 && !sentCache.has(key)) break;
+        sentCache.set(key, message.message);
+    }
 }
 export async function connectToWhatsApp() {
-    if (stopping || connecting || socket) return;
+    if (stopping || connecting || socket || authFailed) return;
     connecting = true;
     status = 'connecting';
     const epoch = ++generation;
     try {
         await pendingCredentials;
-        await mkdir(authDir, { recursive: true, mode: 0o700 });
-        const { state, saveCreds } = await useMultiFileAuthState(authDir);
+        const auth = await openAuthStore(authDir, {codec:BufferJSON, initCreds:initAuthCreds, decodeAppStateKey:v=>proto.Message.AppStateSyncKeyData.fromObject(v)});
+        currentAuth = auth;
+        const { state, saveCreds } = auth;
         if (stopping || epoch !== generation) return;
         const sock = makeWASocket({
-            auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
-            logger, markOnlineOnConnect: false, syncFullHistory: false,
+            auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, protocolLogger) },
+            logger:protocolLogger, markOnlineOnConnect: false, syncFullHistory: false,
             connectTimeoutMs: 30000, maxMsgRetryCount: 3, msgRetryCounterCache: retryCache,
-            getMessage: async key => sentCache.get(messageKey(key) || '') || undefined
+            getMessage: async key => messageKeys(key).map(k=>sentCache.get(k)).find(Boolean)
         });
         socket = sock;
         const originalSend = sock.sendMessage.bind(sock);
         sock.sendMessage = async (...args) => { const result = await originalSend(...args); cacheMessage(result); return result; };
         sock.ev.on('creds.update', () => {
-            pendingCredentials = pendingCredentials.then(() => saveCreds()).catch(() => logger.error('No se pudieron guardar las credenciales'));
+            pendingCredentials = pendingCredentials.then(() => saveCreds()).catch(() => {
+                authFailed = true; status = 'requires_attention'; logger.error('No se pudieron guardar las credenciales; conexión detenida');
+                if (socket === sock) { socket = undefined; sock.end(undefined); }
+            });
         });
         sock.ev.on('connection.update', update => {
-            if (epoch !== generation || stopping || socket !== sock) return;
+            if (epoch !== generation || stopping || authFailed || socket !== sock) return;
             const { connection, qr, lastDisconnect } = update;
             if (qr) {
                 status = 'awaiting_qr';
@@ -75,7 +87,9 @@ export async function connectToWhatsApp() {
                 if (type !== 'notify' || status !== 'connected') continue;
                 const m = normalizedMessage(raw);
                 const command = commandOf(m);
-                if (!command || seen.seen(messageKey(m.key))) continue;
+                if (!command) continue;
+                const keys = messageKeys(m.key);
+                if (!keys.length || keys.map(k=>seen.seen(k)).some(Boolean)) continue;
                 const execute = async () => {
                     if (socket !== sock || status !== 'connected') return;
                     const started = Date.now();
@@ -93,6 +107,7 @@ export async function connectToWhatsApp() {
             }
         });
     } catch (error) {
+        if (error?.code === 'AUTH_CORRUPT') { authFailed = true; status = 'requires_attention'; logger.error('Credenciales inválidas; se conservan intactas'); return; }
         status = 'disconnected'; logger.error({ type: error?.name }, 'Error iniciando WhatsApp'); retry();
     } finally { connecting = false; }
 }
@@ -101,5 +116,7 @@ export async function stopBot() {
     const current = socket; socket = undefined;
     current?.end(undefined);
     await pendingCredentials;
+    await currentAuth?.flush();
+    clearInterval(summaryTimer); protocolLogger.flush();
     sentCache.close(); retryCache.close();
 }

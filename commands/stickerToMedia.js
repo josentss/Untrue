@@ -1,4 +1,4 @@
-import { downloadMediaMessage } from '@whiskeysockets/baileys';
+import { downloadMediaMessage } from 'baileys';
 import { writeFile, unlink, existsSync, mkdirSync, readFileSync } from 'fs';
 import { promisify } from 'util';
 import ffmpeg from 'fluent-ffmpeg';

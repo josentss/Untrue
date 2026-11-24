@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { unlinkSync, readdirSync, existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { exec } from 'node:child_process';
 import { promisify } from 'util';
-import { downloadContentFromMessage } from '@whiskeysockets/baileys';
+import { downloadContentFromMessage } from 'baileys';
 
 const execPromise = promisify(exec);
 const LIBREOFFICE = process.env.LIBREOFFICE_PATH || 'libreoffice';

@@ -3,7 +3,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import fs from 'fs';
 import { promisify } from 'util';
-import { downloadMediaMessage } from '@whiskeysockets/baileys';
+import { downloadMediaMessage } from 'baileys';
 
 const execPromise = promisify(exec);
 
