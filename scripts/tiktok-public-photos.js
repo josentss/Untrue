@@ -3,7 +3,7 @@ const url=process.argv[2];
 function first(value){
     if(typeof value==='string')return value.startsWith('https://')?value:undefined;
     if(Array.isArray(value))return value.map(first).find(Boolean);
-    return value&&typeof value==='object'?first(value.url||value.src||value.playUrl):undefined;
+    return value&&typeof value==='object'?first(value.url||value.src||value.playUrl||value.url_list||value.urlList||value.display_image||value.imageURL):undefined;
 }
 try{
     let r={};

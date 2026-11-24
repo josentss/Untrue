@@ -8,7 +8,7 @@ const hosts={
     pinterest:['pinterest.com','www.pinterest.com','pin.it','pinterest.es','www.pinterest.es','es.pinterest.com','uk.pinterest.com','fr.pinterest.com','de.pinterest.com','mx.pinterest.com','ca.pinterest.com','br.pinterest.com','pt.pinterest.com','it.pinterest.com','au.pinterest.com','pinterest.co.uk','www.pinterest.co.uk','pinterest.ca','www.pinterest.ca','pinterest.de','www.pinterest.de','pinterest.fr','www.pinterest.fr','pinterest.com.mx','www.pinterest.com.mx']
 };
 export function socialUrl(platform,value){
-    if(typeof value==='string')value=value.trim();
+    if(typeof value==='string')value=value.trim().replace(/^[\u200B\u200E\u200F\u2060]+|[\u200B\u200E\u200F\u2060]+$/g,'').trim();
     if(typeof value!=='string'||value.length>2048||/[\x00-\x20\x7f]/.test(value))throw invalid();
     let u;try{u=new URL(/^https?:\/\//i.test(value)?value:'https://'+value);}catch{throw invalid();}
     if(u.protocol!=='https:'||u.username||u.password||u.port||!hosts[platform]?.includes(u.hostname))throw invalid();
@@ -36,7 +36,7 @@ export function socialUrl(platform,value){
     }
     if(platform==='pinterest'){
         if(u.hostname==='pin.it'&&/^\/[\w-]+\/?$/.test(p))return {url:u.origin+p,short:true};
-        const m=/^\/pin\/(?:[\w-]+--)?(\d+)\/?$/.exec(p);
+        const m=/^\/pin\/(?:[\w-]+--)?(\d+)(?:\/sent)?\/?$/.exec(p);
         if(!m)throw invalid();
         return {url:'https://www.pinterest.com/pin/'+m[1]+'/',id:m[1]};
     }
@@ -52,7 +52,7 @@ export function socialUrl(platform,value){
     }
     throw invalid();
 }
-const cdns={tiktok:['tiktokcdn.com','tiktokcdn-us.com','tiktokcdn-eu.com','tiktokv.com','tiktok.com','byteoversea.com','ibytedtos.com','muscdn.com'],instagram:['cdninstagram.com','fbcdn.net'],twitter:['pbs.twimg.com','video.twimg.com'],pinterest:['i.pinimg.com','v.pinimg.com']};
+const cdns={tiktok:['tiktokcdn.com','tiktokcdn-us.com','tiktokcdn-eu.com','tiktokv.com','tiktok.com','byteoversea.com','ibytedtos.com','byteimg.com','ibyteimg.com','muscdn.com'],instagram:['cdninstagram.com','fbcdn.net'],twitter:['pbs.twimg.com','video.twimg.com'],pinterest:['i.pinimg.com','v.pinimg.com','v1.pinimg.com']};
 export function trustedUrl(value,domains){
     let u;try{u=new URL(value);}catch{throw invalid();}
     if(u.protocol!=='https:'||u.username||u.password||u.port||!domains.some(d=>u.hostname===d||u.hostname.endsWith('.'+d)))throw invalid();

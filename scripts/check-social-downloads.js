@@ -4,7 +4,7 @@ import {join} from 'node:path';
 import {readFile,copyFile,access} from 'node:fs/promises';
 import {withTemp,run} from '../core/process.js';
 import {ffmpeg,ytDlp} from '../core/config.js';
-import {withSocialDownload,pinterestItems,instagramPublicItems,normalizeSocialFile} from '../services/socialDownloader.js';
+import {withSocialDownload,pinterestItems,pinDataItems,instagramPublicItems,normalizeSocialFile} from '../services/socialDownloader.js';
 await withTemp(async dir=>{
     const image=join(dir,'fixture.png'),video=join(dir,'fixture.mp4');
     await sharp({create:{width:120,height:100,channels:3,background:'red'}}).png().toFile(image);
@@ -51,12 +51,13 @@ await withTemp(async dir=>{
     const pinImage='https://i.pinimg.com/originals/a.png';
     const pinFetch=async url=>{
         if(url==='https://pin.it/abc')return new Response(null,{status:302,headers:{location:'https://www.pinterest.com/pin/123/'}});
+        if(url.startsWith('https://www.pinterest.com/resource/PinResource/get/')){const id=JSON.parse(new URL(url).searchParams.get('data')).options.id;return Response.json({resource_response:{data:{id,images:{orig:{url:pinImage}}}}});}
         if(url==='https://www.pinterest.com/pin/123/')return new Response('<meta property="og:image" content="'+pinImage+'">');
         if(url===pinImage)return new Response(picture);
         throw Error('unexpected pin url');
     };
     await withSocialDownload('pinterest','https://pin.it/abc',{kind:'post'},async item=>assert.equal(item.kind,'image'),{fetcher:pinFetch});
-    const tphoto='https://p16.tiktokcdn.com/a.png',taudio='https://a.tiktokcdn.com/a.mp3';
+    const tphoto='https://p16-tiktok-sign-va-h2.ibyteimg.com/a.png',taudio='https://a.tiktokcdn.com/a.mp3';
     const audio=join(dir,'fixture.mp3');
     await run(ffmpeg,['-v','error','-f','lavfi','-i','sine=frequency=440','-t','2','-c:a','libmp3lame','-y',audio]);
     const sound=await readFile(audio);
@@ -82,7 +83,7 @@ await withTemp(async dir=>{
     };
     await withSocialDownload('tiktok','https://vt.tiktok.com/ZSs2dmLnJ',{kind:'video'},async item=>assert.equal(item.kind,'image'),{runner:tRunner,fetcher:shortPhotoFetch});
     const localizedPin=async url=>{
-        if(url==='https://pin.it/2s74Wk6q9')return new Response(null,{status:302,headers:{location:'https://es.pinterest.com/pin/637400153560476445/'}});
+        if(url==='https://pin.it/2s74Wk6q9')return new Response(null,{status:302,headers:{location:'https://es.pinterest.com/pin/637400153560476445/sent/?invite_code=abc'}});
         if(url==='https://www.pinterest.com/pin/637400153560476445/')return new Response('<meta property="og:image" content="'+pinImage+'">');
         return pinFetch(url);
     };
@@ -118,5 +119,28 @@ await withTemp(async dir=>{
     let restrictedCalls=0;
     await assert.rejects(withSocialDownload('instagram','https://instagram.com/p/ABC/',{kind:'post'},async()=>assert.fail('restricted media must not send'),{fetcher:async()=>{restrictedCalls++;return new Response(null,{status:403});}}),{code:'restricted'});
     assert.equal(restrictedCalls,1);
+    const storyPin={id:'123',images:{orig:{url:pinImage}},story_pin_data:{pages:[{blocks:[{video:{video_list:{V_720P:{url:'https://v1.pinimg.com/a.mp4',width:720,height:1280}}}}]}]}};
+    assert.equal(pinDataItems(storyPin).video,true);
+    const videoPinFetch=async url=>{
+        if(url.startsWith('https://www.pinterest.com/resource/PinResource/get/'))return Response.json({resource_response:{data:storyPin}});
+        if(url==='https://v1.pinimg.com/a.mp4')return new Response(movie);
+        throw Error('unexpected pin request');
+    };
+    await withSocialDownload('pinterest','https://es.pinterest.com/pin/123/',{kind:'post'},async item=>assert.equal(item.kind,'video'),{fetcher:videoPinFetch});
+    const embedHtml='<script>window.__additionalDataLoaded("/p/ABC/embed/",'+JSON.stringify({graphql:{shortcode_media:{shortcode:'ABC',__typename:'GraphSidecar',edge_sidecar_to_children:{edges:[{node:{__typename:'GraphImage',display_url:a}},{node:{__typename:'GraphVideo',video_url:b}}]}}}})+');</script>';
+    assert.equal(instagramPublicItems(embedHtml,'ABC').length,2);
+    const embedFetch=async url=>{
+        if(url.startsWith('https://api.bk9.dev/'))throw new DOMException('The operation timed out','TimeoutError');
+        if(url==='https://www.instagram.com/p/ABC/embed/')return new Response(embedHtml);
+        return fetcher(url);
+    };
+    await withSocialDownload('instagram','https://instagram.com/p/ABC/',{kind:'post',position:2},async item=>assert.equal(item.kind,'video'),{fetcher:embedFetch});
+    // Unclassified poster cannot win over an actual video.
+    const ambiguousFetch=async url=>{
+        if(url.startsWith('https://www.pinterest.com/resource/'))return new Response(null,{status:404});
+        if(url==='https://www.pinterest.com/pin/123/')return new Response('<meta property="og:image" content="'+pinImage+'">');
+        return pinFetch(url);
+    };
+    await withSocialDownload('pinterest','https://www.pinterest.com/pin/123/',{kind:'post'},async item=>assert.equal(item.kind,'video'),{runner,fetcher:ambiguousFetch});
     console.log('Social media routing, mixed carousel, silent MP4, partial errors and cleanup verified');
 });

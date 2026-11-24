@@ -51,3 +51,10 @@ test('regression: empty TikTok handle and localized Pinterest links',()=>{
     assert.throws(()=>socialUrl('pinterest','https://es.pinterest.com.evil.test/pin/123/'));
     assert.throws(()=>socialUrl('tiktok','https://www.tiktok.com/redirect?url=https://evil.test'));
 });
+
+test('Pinterest sent redirects and TikTok photo CDNs',()=>{
+    assert.equal(socialUrl('pinterest','https://es.pinterest.com/pin/637400153560476445/sent/?invite_code=abc').url,'https://www.pinterest.com/pin/637400153560476445/');
+    assert.equal(mediaUrl('tiktok','https://p16-tiktok-sign-va-h2.ibyteimg.com/photo.webp'),'https://p16-tiktok-sign-va-h2.ibyteimg.com/photo.webp');
+    assert.throws(()=>mediaUrl('tiktok','https://ibyteimg.com.evil.test/a'));
+    assert.equal(socialUrl('tiktok','https://vt.tiktok.com/ZSs2dmLnJ\u200B').short,true);
+});
