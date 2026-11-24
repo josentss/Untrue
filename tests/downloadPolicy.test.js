@@ -22,3 +22,14 @@ test('download command flags and classified errors',()=>{
     assert.equal(publicError({diagnostic:'HTTP Error 429'}).code,'remote_limit');
     assert.equal(publicError(new Error('Tiempo de procesamiento agotado')).code,'timeout');
 });
+
+import { run } from '../core/process.js';
+test('scoped diagnostics and cancellation do not change existing process defaults',async()=>{
+    const code='console.error("synthetic diagnostic");process.exit(2)';
+    await assert.rejects(run(process.execPath,['-e',code]),e=>!e.diagnostic);
+    await assert.rejects(run(process.execPath,['-e',code],{diagnostics:true}),e=>e.diagnostic.includes('synthetic diagnostic'));
+    const abort=new AbortController();
+    const pending=run(process.execPath,['-e','setInterval(()=>{},1000)'],{signal:abort.signal,processGroup:true});
+    abort.abort(Error('test cancellation'));
+    await assert.rejects(pending,/test cancellation/);
+});

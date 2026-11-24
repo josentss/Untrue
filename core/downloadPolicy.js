@@ -3,6 +3,7 @@ export class DownloadError extends Error {
 }
 const invalid=()=>new DownloadError('input','Introduce un enlace válido o una búsqueda.');
 export function mediaInput(platform,value){
+    if(!['youtube','soundcloud'].includes(platform)) throw invalid();
     const q=String(value||'').trim();
     if(!q||q.length>2048||/[\x00-\x1f\x7f]/.test(q)) throw invalid();
     const isLink=/^[a-z][a-z0-9+.-]*:/i.test(q)||/^(?:www\.|(?:m\.|music\.)?youtube\.com\/|youtu\.be\/|soundcloud\.com\/|on\.soundcloud\.com\/)/i.test(q);
@@ -30,7 +31,11 @@ export function mediaInput(platform,value){
     return 'https://soundcloud.com/'+user+'/'+track;
 }
 export const maxDuration={audio:3600,video:1800};
-export const videoFormat='bv[ext=mp4][vcodec^=avc1][height<=720]+ba[ext=m4a][acodec^=mp4a]/b[ext=mp4][vcodec^=avc1][acodec^=mp4a][height<=720]';
+export function videoFormat(limit){
+    // Exclude formats known to be too large. Actual combined size is checked after merge.
+    const bounded='[filesize<=?'+limit+'][filesize_approx<=?'+limit+']';
+    return 'bv[ext=mp4][vcodec^=avc1][height<=720]'+bounded+'+ba[ext=m4a][acodec^=mp4a]'+bounded+'/b[ext=mp4][vcodec^=avc1][acodec^=mp4a][height<=720]'+bounded;
+}
 export function durationText(seconds){
     if(!Number.isFinite(seconds)||seconds<0)return 'N/D';
     const s=Math.floor(seconds),h=Math.floor(s/3600),m=Math.floor(s/60)%60;

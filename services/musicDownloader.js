@@ -9,10 +9,10 @@ export function commonArgs(){
     return ['--ignore-config','--no-plugin-dirs','--no-remote-components','--no-js-runtimes','--js-runtimes','node:'+process.execPath,'--no-playlist','--playlist-items','1','--no-progress','--no-colors','--socket-timeout','12','--retries','1','--fragment-retries','1','--extractor-retries','1','--abort-on-unavailable-fragments'];
 }
 export function downloadArgs(input,dir,kind,limit){
-    const args=[...commonArgs(),'--no-simulate','--max-filesize',String(limit),'--match-filter','!is_live & !is_upcoming & duration <= '+maxDuration[kind],'--print','after_move:'+metadataTemplate,'-o',join(dir,'media.%(ext)s')];
+    const args=[...commonArgs(),'--no-simulate','--max-filesize',String(limit),'--match-filter','!is_live & !is_upcoming & duration <= '+maxDuration[kind]+' & availability !=? private & availability !=? premium_only & availability !=? subscriber_only & availability !=? needs_auth','--print','after_move:'+metadataTemplate,'-o',join(dir,'media.%(ext)s')];
     if(ffmpeg!=='ffmpeg')args.push('--ffmpeg-location',ffmpeg);
     if(kind==='audio')args.push('-f','ba/b','-x','--audio-format','mp3','--audio-quality','192K');
-    else args.push('-f',videoFormat,'--merge-output-format','mp4');
+    else args.push('-f',videoFormat(limit),'--merge-output-format','mp4');
     return [...args,'--',input];
 }
 function cleanText(value,fallback,max=180){
@@ -61,7 +61,7 @@ export async function verifyDownload(path,kind,limit,runner=run){
     const probe=JSON.parse(stdout),streams=probe.streams||[],duration=Number(probe.format?.duration);
     const video=streams.find(s=>s.codec_type==='video'&&!s.disposition?.attached_pic);
     const audio=streams.find(s=>s.codec_type==='audio');
-    const ok=kind==='audio'?audio?.codec_name==='mp3'&&String(probe.format?.format_name).split(',').includes('mp3')&&!video:video?.codec_name==='h264'&&video.height<=720&&audio?.codec_name==='aac'&&String(probe.format?.format_name).split(',').includes('mp4');
+    const ok=kind==='audio'?audio?.codec_name==='mp3'&&String(probe.format?.format_name).split(',').includes('mp3')&&!video:video?.codec_name==='h264'&&Number.isFinite(video.height)&&video.height>0&&video.height<=720&&audio?.codec_name==='aac'&&String(probe.format?.format_name).split(',').includes('mp4');
     if(!ok||!Number.isFinite(duration)||duration<=0||duration>maxDuration[kind]+1)throw new DownloadError('format','El archivo no cumple los requisitos de reproducción.');
     return {bytes:s.size,duration,height:video?.height};
 }
@@ -75,7 +75,7 @@ export async function withMusicDownload(platform,kind,query,consume,{runner=run,
             const checked=await verifyDownload(filePath,kind,limit,runner);
             const info=mediaInfo(metadata(stdout),checked.duration);
             console.info('Descarga verificada '+JSON.stringify({platform,kind,ms:Date.now()-start,bytes:checked.bytes,duration:checked.duration,height:checked.height}));
-            return await consume({filePath,info,...checked});
+            try{return await consume({filePath,info,...checked});}catch{throw new DownloadError('send','No se pudo enviar el archivo descargado a WhatsApp.');}
         }catch(e){throw publicError(e);}
     });
 }

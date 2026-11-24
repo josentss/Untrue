@@ -1,5 +1,5 @@
 import { withMusicDownload } from '../services/musicDownloader.js';
-import { publicError } from '../core/downloadPolicy.js';
+import { publicError,mediaInput } from '../core/downloadPolicy.js';
 import { quotedText } from '../core/urls.js';
 export function musicQuery(m,args){
     return (args||[]).join(' ').trim()||quotedText(m).match(/https:\/\/[^\s]+/)?.[0]||'';
@@ -9,7 +9,7 @@ export async function musicCommand(sock,m,args,{platform,kind,command}){
     if(!query){await sock.sendMessage(jid,{text:'Uso: #'+command+' [enlace o búsqueda]'},{quoted:m});return;}
     try{
         // Validate before notifying the user that a download started.
-        const {mediaInput}=await import('../core/downloadPolicy.js');mediaInput(platform,query);
+        mediaInput(platform,query);
         await sock.sendMessage(jid,{text:kind==='audio'?'Descargando audio…':'Descargando video…'},{quoted:m});
         await withMusicDownload(platform,kind,query,async({filePath,info,bytes,height})=>{
             const caption=info.title+'\n'+info.author+' · '+info.durationFormatted+' · '+(bytes/1048576).toFixed(2)+' MB'+(kind==='video'?' · '+height+'p':' · MP3');

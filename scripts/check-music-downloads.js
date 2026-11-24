@@ -30,9 +30,10 @@ await withTemp(async dir=>{
         await withMusicDownload(platform,kind,query,async r=>{assert.equal(r.info.title,meta.title);assert.ok(r.bytes>0);await access(r.filePath);},{runner:fake});
         assert.equal(calls,before+1);await assert.rejects(access(path));
     }
-    await assert.rejects(withMusicDownload('youtube','audio','fixture',async()=>{throw Error('send failed');},{runner:fake}),{code:'failed'});
+    await assert.rejects(withMusicDownload('youtube','audio','fixture',async()=>{throw Error('send failed');},{runner:fake}),{code:'send'});
     await assert.rejects(access(path));
     assert.equal((await getYoutubeInfo('fixture',{runner:fake})).author,'Untrue CI');
+    await assert.rejects(withMusicDownload('youtube','audio','fixture',async()=>assert.fail('must not send'),{runner:async()=>{throw Object.assign(new Error('process failed'),{diagnostic:'HTTP Error 429'});}}),{code:'remote_limit'});
     // Exercise actual yt-dlp, FFmpeg postprocessing and metadata template on an
     // operator-owned local fixture. Never access a commercial platform in CI.
     const payload=await readFile(video);
