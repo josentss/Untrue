@@ -87,6 +87,12 @@ export async function createSticker(input,dir,{kind,crop=true}={}) {
         if(!['jpeg','png','webp','gif','heif','tiff','avif'].includes(meta.format)) throw new MediaError('Formato de imagen no compatible.');
         const info=animationInfo(meta); animated=info.animated;
         const framePixels=meta.width*(meta.pageHeight||meta.height);
+        // Re-sticker an already compliant WebP without recompression or decoding hundreds of frames.
+        if(meta.format==='webp'&&meta.width===512&&(meta.pageHeight||meta.height)===512&&framePixels*info.pages<=LIMITS.animationPixels&&(await stat(input)).size<=(animated?LIMITS.animatedBytes:LIMITS.staticBytes)){
+            await addExif(input,output);
+            const result=await checkSticker(output,animated);
+            if(result) return result;
+        }
         if(framePixels*info.pages>LIMITS.pixels||info.pages*512*512>LIMITS.animationPixels) throw new MediaError('Animación demasiado grande.');
         if(animated&&!['webp','gif'].includes(meta.format)) throw new MediaError('Solo GIF y WebP admiten animaciones de imagen.');
         const profiles=animated?[[78,512],[58,512],[40,512],[28,512],[15,512]]:[[88,512],[75,512],[58,512],[40,512],[25,512],[15,512]];

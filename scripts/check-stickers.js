@@ -66,11 +66,13 @@ await withTemp(async dir=>{
     assert.equal(soundCodecAvailable(),true);
     // Full-duration audio, including the former 5-second regression.
     const longSound=join(dir,'eight-seconds.mp4');
-    await run(ffmpeg,['-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=black:size=160x120:rate=30','-f','lavfi','-i','color=c=white:size=24x24:rate=30','-f','lavfi','-i','sine=frequency=440','-filter_complex','[0:v][1:v]overlay=x=10+10*t:y=40','-t','8','-c:v','libx264','-pix_fmt','yuv420p','-threads','2','-c:a','aac','-y',longSound],{timeout:30000});
+    await run(ffmpeg,['-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=black:size=160x120:rate=30','-f','lavfi','-i','color=c=white:size=24x24:rate=30','-f','lavfi','-i','sine=frequency=440','-filter_complex','[0:v][1:v]overlay=x=mod(120*t\\,130):y=40','-t','8','-c:v','libx264','-pix_fmt','yuv420p','-threads','2','-c:a','aac','-y',longSound],{timeout:30000});
     const smooth=await createSticker(longSound,await sub('smooth'),{kind:'video'});
     assert.ok(smooth.fps>=24,'simple 30 FPS source should retain at least 24 FPS');
     assert.ok(smooth.frames>180,'old frame limit must not reject a smooth 8 second sticker');
     assert.ok(Math.abs(smooth.durationMs-8000)<100);
+    const reused=await createSticker(smooth.path,await sub('reused'),{kind:'sticker'});
+    assert.equal(reused.frames,smooth.frames);assert.equal(reused.durationMs,smooth.durationMs);
     const fullClip=await prepareStickerAudio(longSound,await sub('full-audio'),smooth.durationMs);
     assert.ok(fullClip.durationMs>7800&&fullClip.durationMs<=8000);
     assert.equal(fullClip.seconds,8);
