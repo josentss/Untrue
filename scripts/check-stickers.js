@@ -9,6 +9,8 @@ import {createSticker,convertWebp,inspectMedia,extractAudio,LIMITS,stickerExif} 
 import {saveBoundedStream,downloadToFile} from '../services/mediaDownload.js';
 import {proto,generateWAMessageContent,generateWAMessageFromContent} from 'baileys';
 import {installSoundStickerCodec,soundCodecAvailable} from '../core/soundStickerCodec.js';
+import {StickerAudioCache} from '../core/stickerAudioCache.js';
+import {selectMedia} from '../core/mediaTarget.js';
 import {stationaryWebp} from '../core/stationaryWebp.js';
 import {prepareStickerAudio,uploadStickerAudio} from '../services/stickerSound.js';
 
@@ -112,6 +114,13 @@ await withTemp(async dir=>{
     assert.equal(await prepareStickerAudio(simple15,await sub('silent15'),smooth15.durationMs),null);
     const smoothRecovered=await convertWebp(smooth15.path,await sub('smooth-recovered'));
     assert.ok(Number((await inspectMedia(smoothRecovered.path)).format.duration)>=14.8);
+    const lowFps=join(dir,'low-fps-14.mp4');
+    await run(ffmpeg,['-v','error','-f','lavfi','-i','testsrc2=size=320x240:rate=10','-t','14.8','-c:v','libx264','-threads','2','-pix_fmt','yuv420p','-y',lowFps],{timeout:30000});
+    const lowSticker=await createSticker(lowFps,await sub('low-fps'),{kind:'video'});
+    assert.ok(lowSticker.animated&&lowSticker.bytes<=LIMITS.animatedBytes);
+    assert.ok(Math.abs(lowSticker.durationMs-14800)<=100);
+    const lowRecovered=await convertWebp(lowSticker.path,await sub('low-fps-recovered'));
+    assert.ok(Number((await inspectMedia(lowRecovered.path)).format.duration)>=14.6);
     const stationary=join(dir,'stationary.mp4');
     await run(ffmpeg,['-v','error','-f','lavfi','-i','color=size=128x128:rate=30','-f','lavfi','-i','sine=frequency=440','-t','3','-c:v','libx264','-threads','2','-c:a','aac','-y',stationary],{timeout:15000});
     const stationarySticker=await createSticker(stationary,await sub('stationary'),{kind:'video'});
@@ -165,7 +174,25 @@ await withTemp(async dir=>{
     assert.equal(groupDecoded.message.stickerMessage.audioMessage.directPath,audioMessage.directPath);
     console.log('Group and private sticker payloads preserve sound offline');
     assert.equal(proto.Message.StickerMessage.decode(proto.Message.StickerMessage.encode({width:512}).finish()).audioMessage,undefined);
-    const soundVideo=await convertWebp(animated.path,await sub('sound-video'),{audioPath:clip.path});
+    // Actual Baileys message round-trip, then a client quote with the audio omitted.
+    const cache=new StickerAudioCache();
+    cache.remember(groupDecoded);
+    const quotedVisual={...groupDecoded.message.stickerMessage};
+    delete quotedVisual.audioMessage;
+    const response=proto.WebMessageInfo.decode(proto.WebMessageInfo.encode({
+        key:{remoteJid:groupJid,id:'cmd',participant:'123@lid'},
+        message:{extendedTextMessage:{text:'#sm',contextInfo:{stanzaId:groupDecoded.key.id,quotedMessage:{stickerMessage:quotedVisual}}}}
+    }).finish());
+    const target=selectMedia(response,{audioCache:cache});
+    assert.equal(target.audioSource,'cache');
+    assert.deepEqual(Buffer.from(target.audio.mediaKey),Buffer.from(audioMessage.mediaKey));
+    const soundPath=join(dir,'recovered-sound.ogg');
+    await downloadToFile({media:target.audio,type:'audio'},soundPath,{download:async(media,type)=>{
+        assert.equal(type,'audio');assert.equal(media.directPath,audioMessage.directPath);
+        const {createReadStream}=await import('node:fs');
+        return createReadStream(clip.path);
+    }});
+    const soundVideo=await convertWebp(animated.path,await sub('sound-video'),{audioPath:soundPath});
     const streams=(await inspectMedia(soundVideo.path)).streams;
     assert.ok(streams.some(s=>s.codec_type==='audio'&&s.codec_name==='aac'));
     assert.ok(streams.some(s=>s.codec_type==='video'&&s.codec_name==='h264'));

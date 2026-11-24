@@ -9,6 +9,7 @@ import { authDir, maxJobs } from './core/config.js';
 import { normalizedMessage, commandOf, RecentKeys } from './core/messages.js';
 import { JobQueue } from './core/queue.js';
 import { eventAge, historyPolicy } from './core/messageTiming.js';
+import { stickerAudioCache } from './core/stickerAudioCache.js';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 
 const logger = Pino({ level: process.env.LOG_LEVEL || 'info', redact: ['key.remoteJid', 'key.participant', 'msgAttrs.from', 'msgAttrs.participant', 'qr'] });
@@ -59,7 +60,7 @@ export async function connectToWhatsApp() {
         });
         socket = sock;
         const originalSend = sock.sendMessage.bind(sock);
-        sock.sendMessage = async (...args) => { const result = await originalSend(...args); cacheMessage(result); return result; };
+        sock.sendMessage = async (...args) => { const result = await originalSend(...args); cacheMessage(result); stickerAudioCache.remember(result); return result; };
         sock.ev.on('creds.update', () => {
             pendingCredentials = pendingCredentials.then(() => saveCreds()).catch(() => {
                 authFailed = true; status = 'requires_attention'; logger.error('No se pudieron guardar las credenciales; conexión detenida');
@@ -89,6 +90,7 @@ export async function connectToWhatsApp() {
             if (epoch !== generation || stopping || socket !== sock) return;
             for (const raw of messages || []) {
                 if (raw.key?.fromMe) cacheMessage(raw);
+                if (type === 'notify' && !requestId) stickerAudioCache.remember(raw);
                 if (type !== 'notify' || requestId || status !== 'connected') continue;
                 const m = normalizedMessage(raw);
                 const command = commandOf(m);

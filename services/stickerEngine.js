@@ -74,10 +74,10 @@ function sourceFps(info) {
     }
     return 24;
 }
-function videoFilter(size,fps,crop,alpha) {
-    return 'fps='+fps+(alpha?',format=rgba':'')+',scale='+size+':'+size+':force_original_aspect_ratio='+(crop?'increase':'decrease')+
+function videoFilter(size,fps,crop,alpha,clean=false) {
+    return 'fps='+fps+(alpha?',format=rgba':'')+',scale='+size+':'+size+':force_original_aspect_ratio='+(crop?'increase':'decrease')+(clean?':flags=bicubic':'')+
         (crop?',crop='+size+':'+size:',pad='+size+':'+size+':(ow-iw)/2:(oh-ih)/2:color=black@0')+
-        ',scale=512:512:flags=bilinear,setsar=1,format='+(alpha?'yuva420p':'yuv420p');
+        ',scale=512:512:flags='+(clean?'bicubic':'bilinear')+',setsar=1,format='+(alpha?'yuva420p':'yuv420p');
 }
 export async function createSticker(input,dir,{kind,crop=true}={}) {
     const end=deadline();
@@ -120,19 +120,22 @@ export async function createSticker(input,dir,{kind,crop=true}={}) {
         const profiles=duration>10
             ? [[30,35,384],[24,28,320],[20,18,224],[15,12,160],[12,8,112],[10,5,80],[8,0,64],[6,0,48]]
             : [[30,duration>5?35:65,512],[30,duration>5?18:35,320],[24,18,256],[18,12,192],[15,8,144],[12,5,96],[10,0,64],[8,0,48],[6,0,48]];
+        // For long, low-FPS sources, try a less aggressive quantizer and smooth scaling first.
+        // Keep every proven PR #10 profile unchanged as a fallback.
+        if(duration>10&&fpsSource<=15) profiles.unshift([30,45,320,true]);
         const attempted=new Set();
         let smallest=Infinity, lastFailure='size';
-        for(const [cap,quality,size] of profiles){
+        for(const [cap,quality,size,clean=false] of profiles){
             // Integer rates keep exact 15-second sources within the duration limit.
             const fps=Math.min(Math.max(1,Math.floor(fpsSource)),cap);
-            const key=[fps,quality,size].join(':');
+            const key=[fps,quality,size,clean].join(':');
             if(attempted.has(key)) continue;
             attempted.add(key);
             let timeout;
             try { timeout=remaining(end); }
             catch { lastFailure='timeout'; break; }
             try {
-                await run(ffmpeg,[...baseArgs,...inputArgs,'-i',input,'-map','0:'+video.index,'-t',String(duration),'-an','-vf',videoFilter(size,fps,crop,alpha),'-c:v','libwebp_anim','-quality',String(quality),'-compression_level','3','-loop','0','-threads','2',encoded],{timeout});
+                await run(ffmpeg,[...baseArgs,...inputArgs,'-i',input,'-map','0:'+video.index,'-t',String(duration),'-an','-vf',videoFilter(size,fps,crop,alpha,clean),'-c:v','libwebp_anim','-quality',String(quality),'-compression_level','3','-loop','0','-threads','2',encoded],{timeout});
                 const bytes=(await stat(encoded)).size;
                 smallest=Math.min(smallest,bytes);
                 const meta=await metadata(encoded);
@@ -153,12 +156,12 @@ export async function createSticker(input,dir,{kind,crop=true}={}) {
                 const visual=animationInfo(meta,{candidate:true});
                 // A failed candidate must never prevent trying a smaller profile.
                 const validDuration=animated&&visual.durationMs<=LIMITS.durationMs&&Math.abs(visual.durationMs-duration*1000)<=Math.max(100,2000/fps);
-                console.info('Sticker perfil '+JSON.stringify({fps,quality,detail:size,bytes,durationMs:visual.durationMs,frames:visual.pages}));
+                console.info('Sticker perfil '+JSON.stringify({fps,quality,detail:size,clean,bytes,durationMs:visual.durationMs,frames:visual.pages}));
                 if(!validDuration){lastFailure='duration';continue;}
                 if(bytes>LIMITS.animatedBytes){lastFailure='size';continue;}
                 await addExif(encoded,output);
                 const result=await checkSticker(output,true);
-                if(result){ console.info('Sticker perfil seleccionado '+JSON.stringify({fps:result.fps,quality,detail:size,bytes:result.bytes})); return result; }
+                if(result){ console.info('Sticker perfil seleccionado '+JSON.stringify({fps:result.fps,quality,detail:size,clean,bytes:result.bytes})); return result; }
                 lastFailure='size';
             } catch(error) {
                 // Only bounded categories, never stderr, local paths or user data.
