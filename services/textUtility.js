@@ -19,12 +19,12 @@ export async function ocrImage(input,dir,{runner=run}={}){
     return cleanText(stdout);
 }
 export async function speechAudio(input,dir,{runner=run}={}){
-    const {stdout}=await runner(ffprobe,['-v','error','-protocol_whitelist','file,pipe','-show_format','-show_streams','-of','json',input],{timeout:10000,maxOutput:256*1024});
+    const {stdout}=await runner(ffprobe,['-v','error','-protocol_whitelist','file,pipe','-show_format','-show_streams','-of','json',input],{timeout:10000,maxOutput:256*1024,env:childEnv(dir),processGroup:true});
     const probe=JSON.parse(stdout),duration=Number(probe.format?.duration);
     if(!probe.streams?.some(s=>s.codec_type==='audio'))throw new UtilityError('El archivo no contiene audio.');
     if(!Number.isFinite(duration)||duration<=0||duration>MAX_AUDIO_SECONDS)throw new UtilityError('La transcripción admite audios de hasta 10 minutos.');
     const path=join(dir,'speech.mp3');
-    await runner(ffmpeg,['-v','error','-xerror','-nostdin','-protocol_whitelist','file,pipe','-i',input,'-map','0:a:0','-vn','-ac','1','-ar','16000','-c:a','libmp3lame','-b:a','64k','-y',path],{timeout:45000,processGroup:true});
+    await runner(ffmpeg,['-v','error','-xerror','-nostdin','-protocol_whitelist','file,pipe','-i',input,'-map','0:a:0','-vn','-ac','1','-ar','16000','-c:a','libmp3lame','-b:a','64k','-y',path],{timeout:45000,env:childEnv(dir),processGroup:true});
     const size=(await stat(path)).size;
     if(!size||size>8*1024*1024)throw new UtilityError('Audio no compatible para transcripción.');
     return path;
@@ -35,7 +35,7 @@ export async function transcribe(path,{key=process.env.ASSEMBLYAI_KEY,language='
     const json=(suffix,options={})=>utilityJson(BASE+suffix,{fetcher,signal,headers,...options});
     let id;
     try{
-        const upload=await json('/upload',{method:'POST',headers:{...headers,'Content-Type':'application/octet-stream'},body:createReadStream(path),timeout:30000});
+        const upload=await json('/upload',{method:'POST',headers:{...headers,'Content-Type':'application/octet-stream','Content-Length':String((await stat(path)).size)},body:createReadStream(path),timeout:30000});
         let url;try{url=new URL(upload.upload_url);}catch{throw new UtilityError('El servicio no devolvió un audio válido.');}
         if(url.protocol!=='https:'||url.username||url.password||url.port||!(url.hostname==='assemblyai.com'||url.hostname.endsWith('.assemblyai.com')))throw new UtilityError('El servicio devolvió una ubicación no compatible.');
         const job=await json('/transcript',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({audio_url:url.href,speech_models:['universal-2'],...(language==='auto'?{language_detection:true}:{language_code:language}),punctuate:true,format_text:true})});

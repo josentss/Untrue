@@ -21,7 +21,7 @@ export async function bcvCommand(sock,m){
     let text;
     try{
         const r=await exchangeReference();
-        text='*Tasas de referencia (ExchangeRate-API)*\n\nUSD: '+r.usd.toFixed(4)+' Bs\nEUR: '+r.eur.toFixed(4)+' Bs\nActualización: '+rateDate(r.timestamp)+'\nNo equivalen necesariamente a la tasa oficial BCV.';
+        text='*Tasas de referencia (ExchangeRate-API)*\n\nUSD: '+r.usd.toFixed(4)+' Bs\nEUR: '+r.eur.toFixed(4)+' Bs\nActualización: '+rateDate(r.timestamp)+'\nNo equivalen necesariamente a la tasa oficial BCV.\nFuente: https://www.exchangerate-api.com';
     }catch{
         const r=history();
         text='No se pudo obtener la referencia actual.'+(r?'\nÚltimo dato del archivo histórico ('+r.date+'): USD '+r.usd.toFixed(4)+' Bs; EUR '+r.eur.toFixed(4)+' Bs. No vigente.':'');

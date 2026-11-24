@@ -1,5 +1,5 @@
 import {join} from 'node:path';
-import {stat,mkdir,writeFile} from 'node:fs/promises';
+import {stat,mkdir,writeFile,unlink} from 'node:fs/promises';
 import {pathToFileURL} from 'node:url';
 import {run} from '../core/process.js';
 import {childEnv} from './musicDownloader.js';
@@ -35,7 +35,7 @@ export async function renderDocument(input,ext,dir,args,{runner=run,limit=100*10
         const path=stem+'.png',size=await stat(path);
         if(!size.size)throw new UtilityError('No se pudo renderizar la página.');
         let final=path;
-        if(size.size>3*1024*1024){final=stem+'.jpg';await sharp(path,{limitInputPixels:5000000}).flatten({background:'#fff'}).jpeg({quality:88}).toFile(final);}
+        if(size.size>3*1024*1024){final=stem+'.jpg';await sharp(path,{limitInputPixels:5000000}).flatten({background:'#fff'}).jpeg({quality:88}).toFile(final);await unlink(path);}
         bytes+=(await stat(final)).size;
         if(bytes>limit)throw new UtilityError('Las imágenes superan el límite total.');
         out.push({page,total,path:final});

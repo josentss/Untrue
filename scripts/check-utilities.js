@@ -8,15 +8,30 @@ import {translateText} from '../commands/traducir.js';
 import {ffmpeg} from '../core/config.js';
 import sharp from 'sharp';
 await withTemp(async dir=>{
-    // Make a real multi-page PDF through LibreOffice; verify selective rendering.
-    const html=join(dir,'source.html');
-    await writeFile(html,'<html><body>'+Array.from({length:22},(_,i)=>'<p style="page-break-before:'+(i?'always':'auto')+'">Page '+(i+1)+'</p>').join('')+'</body></html>');
-    await run('libreoffice',['--headless','--convert-to','pdf','--outdir',dir,html],{timeout:60000});
-    const pdf=join(dir,'source.pdf');
-    const {stdout}=await run('pdfinfo',[pdf]);const total=Number(/^Pages:\s+(\d+)/m.exec(stdout)?.[1]);assert.ok(total>=22);
+    // Deterministic PDF with 22 pages; no dependence on an HTML importer's
+    // interpretation of CSS page breaks.
+    const n=22,objects=['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Count '+n+' /Kids ['+Array.from({length:n},(_,i)=>(3+i*2)+' 0 R').join(' ')+'] >>'];
+    for(let i=0;i<n;i++){
+        objects.push('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents '+(4+i*2)+' 0 R >>');
+        const body='0 0 1 rg 10 10 '+(20+i)+' 40 re f\n';
+        objects.push('<< /Length '+Buffer.byteLength(body)+' >>\nstream\n'+body+'endstream');
+    }
+    let data='%PDF-1.4\n';const offsets=[0];
+    for(const [i,obj] of objects.entries()){offsets.push(Buffer.byteLength(data));data+=(i+1)+' 0 obj\n'+obj+'\nendobj\n';}
+    const xref=Buffer.byteLength(data);data+='xref\n0 '+offsets.length+'\n0000000000 65535 f \n';
+    for(const offset of offsets.slice(1))data+=String(offset).padStart(10,'0')+' 00000 n \n';
+    data+='trailer\n<< /Size '+offsets.length+' /Root 1 0 R >>\nstartxref\n'+xref+'\n%%EOF\n';
+    const pdf=join(dir,'source.pdf');await writeFile(pdf,data);
     const result=await renderDocument(pdf,'pdf',dir,['22']);
-    assert.equal(result.length,1);assert.equal(result[0].page,22);assert.equal(result[0].total,total);
+    assert.equal(result.length,1);assert.equal(result[0].page,22);assert.equal(result[0].total,22);
     assert.ok((await stat(result[0].path)).size>0);
+    await assert.rejects(renderDocument(pdf,'pdf',dir,[]),/22 páginas/);
+    await withTemp(async office=>{
+        const input=join(office,'source.txt');await writeFile(input,'Documento de prueba.\nHola mundo.');
+        await run('libreoffice',['--headless','--convert-to','docx:Office Open XML Text','--outdir',office,input],{timeout:60000});
+        const pages=await renderDocument(join(office,'source.docx'),'docx',office,['1']);
+        assert.equal(pages.length,1);assert.equal(pages[0].page,1);
+    });
     const img=join(dir,'ocr-fixture.png');
     await sharp(Buffer.from('<svg width="1200" height="300" xmlns="http://www.w3.org/2000/svg"><rect width="1200" height="300" fill="white"/><text x="70" y="150" font-size="80" font-family="DejaVu Sans">HOLA MUNDO</text></svg>')).png().toFile(img);
     assert.match(await ocrImage(img,dir),/HOLA\s+MUNDO/i);

@@ -11,7 +11,7 @@ const format=n=>n.toFixed(4)+' Bs';
 export async function getUSDTPrice(){try{const r=await quote();return {avgPrice:format(r.avg),date:rateDate(r.newest)};}catch{return {avgPrice:'N/D',date:'N/D'};}}
 export async function usdtCommand(sock,m){
     let text;
-    try{const r=await quote();text='*Referencia USDT/VES*\n\nPromedio: '+format(r.avg)+'\nVenta (ask): '+format(r.ask)+'\nCompra (bid): '+format(r.bid)+'\nMercados: '+r.count+'\nÚltima cotización: '+rateDate(r.newest)+'\nFuente: CriptoYa. Promedio simple; no es una oferta de compra o venta.';}
+    try{const r=await quote();text='*Referencia USDT/VES*\n\nPromedio: '+format(r.avg)+'\nCompra de USDT (ask): '+format(r.ask)+'\nVenta de USDT (bid): '+format(r.bid)+'\nMercados: '+r.count+'\nRango de actualización: '+rateDate(r.oldest)+' – '+rateDate(r.newest)+'\nFuente: CriptoYa. Promedio simple; no es una oferta de compra o venta.';}
     catch{text='No hay cotizaciones recientes de USDT disponibles.';}
     await sock.sendMessage(m.key.remoteJid,{text},{quoted:m});
 }
