@@ -1,7 +1,8 @@
 import { unwrap } from './messages.js';
+import { downloadableAudio,stickerAudioCache } from './stickerAudioCache.js';
 
 export class MediaError extends Error {}
-export function selectMedia(message) {
+export function selectMedia(message,{audioCache=stickerAudioCache}={}) {
     const content = unwrap(message?.message);
     if (!content) throw new MediaError('No se permite procesar contenido de visualización única.');
     const context = content.extendedTextMessage?.contextInfo || content.imageMessage?.contextInfo || content.videoMessage?.contextInfo || content.documentMessage?.contextInfo;
@@ -16,7 +17,13 @@ export function selectMedia(message) {
         if (!media) continue;
         const mime = String(media.mimetype || '').split(';')[0].toLowerCase();
         const kind = type === 'document' ? (mime.startsWith('image/')?'image':mime.startsWith('video/')?'video':mime.startsWith('audio/')?'audio':'document') : type;
-        return {type,kind,media,...(type==='sticker'&&media.audioMessage?{audio:media.audioMessage}:{})};
+        if(type==='sticker'){
+            const direct=media.audioMessage;
+            const recovered=!downloadableAudio(direct)&&hasQuote?audioCache.recover(message,context,media):undefined;
+            const audio=downloadableAudio(direct)?direct:recovered||direct;
+            return {type,kind,media,audioSource:downloadableAudio(direct)?'quoted_or_direct':recovered?'cache':direct?'incomplete':'absent',...(audio?{audio}:{})};
+        }
+        return {type,kind,media};
     }
     throw new MediaError('Responde a una imagen, video o sticker compatible.');
 }
