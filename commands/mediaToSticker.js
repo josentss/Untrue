@@ -4,6 +4,7 @@ import { maxInputBytes } from '../core/config.js';
 import { selectMedia,MediaError } from '../core/mediaTarget.js';
 import { downloadToFile } from '../services/mediaDownload.js';
 import { createSticker } from '../services/stickerEngine.js';
+import { stickerChatType,shouldAttachStickerSound } from '../core/stickerDestination.js';
 import { soundStickersEnabled } from '../core/soundStickerCodec.js';
 import { prepareStickerAudio,uploadStickerAudio } from '../services/stickerSound.js';
 
@@ -17,8 +18,7 @@ export async function mediaToStickerCommand(sock,m){
             await downloadToFile(target,input,{limit:Math.min(maxInputBytes,40*1024*1024)});
             const result=await createSticker(input,dir,{kind:target.kind,name:m.pushName});
             const content={sticker:{url:result.path},isAnimated:result.animated,width:512,height:512};
-            const privateChat=/^\d+(?::\d+)?@(s\.whatsapp\.net|lid)$/.test(m.key.remoteJid);
-            if(soundStickersEnabled()&&privateChat&&result.animated&&(target.kind==='video'||target.audio)){
+            if(shouldAttachStickerSound({enabled:soundStickersEnabled(),jid:m.key.remoteJid,animated:result.animated,kind:target.kind,hasAudio:Boolean(target.audio)})){
                 let audioInput=input;
                 if(target.audio){
                     audioInput=join(dir,'source-audio');
@@ -28,6 +28,7 @@ export async function mediaToStickerCommand(sock,m){
                 if(clip) content.audioMessage=await uploadStickerAudio(sock,clip);
             }
             await sock.sendMessage(m.key.remoteJid,content,{quoted:m});
+            if(content.audioMessage) console.info('Sticker sonoro enviado: '+stickerChatType(m.key.remoteJid));
         });
     } catch(e) {
         console.warn('Sticker no procesado:',e instanceof MediaError?'validación':'conversión');
