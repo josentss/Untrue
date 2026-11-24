@@ -111,6 +111,12 @@ await withTemp(async dir=>{
     assert.equal(await prepareStickerAudio(simple15,await sub('silent15'),smooth15.durationMs),null);
     const smoothRecovered=await convertWebp(smooth15.path,await sub('smooth-recovered'));
     assert.ok(Number((await inspectMedia(smoothRecovered.path)).format.duration)>=14.8);
+    const stationary=join(dir,'stationary.mp4');
+    await run(ffmpeg,['-v','error','-f','lavfi','-i','color=size=128x128:rate=30','-f','lavfi','-i','sine=frequency=440','-t','3','-c:v','libx264','-threads','2','-c:a','aac','-y',stationary],{timeout:15000});
+    const stationarySticker=await createSticker(stationary,await sub('stationary'),{kind:'video'});
+    assert.equal(stationarySticker.animated,true);
+    assert.ok(Math.abs(stationarySticker.durationMs-3000)<100);
+    assert.ok(await prepareStickerAudio(stationary,await sub('stationary-audio'),stationarySticker.durationMs));
     console.log('Full 8/10/15-second audio, detailed fallback, high FPS and batched recovery verified');
     const clip=await prepareStickerAudio(video,await sub('sound'),animated.durationMs);
     assert.ok(clip);

@@ -113,7 +113,7 @@ export async function createSticker(input,dir,{kind,crop=true}={}) {
         animated=true;
         const fpsSource=sourceFps(info);
         const video=info.streams.find(s=>s.codec_type==='video'&&!s.disposition?.attached_pic);
-        const alpha=/^(?:rgba|bgra|argb|abgr|yuva|gbrap|ya)/.test(video.pix_fmt||'');
+        const alpha=!crop||/^(?:rgba|bgra|argb|abgr|yuva|gbrap|ya|pal8)/.test(video.pix_fmt||'');
         // Choose a stronger initial compression for long clips; preserve motion
         // whenever possible, then reduce spatial detail and finally FPS.
         const profiles=duration>10
@@ -136,10 +136,19 @@ export async function createSticker(input,dir,{kind,crop=true}={}) {
                 smallest=Math.min(smallest,bytes);
                 const meta=await metadata(encoded);
                 animated=(meta.pages||1)>1;
+                if(!animated&&duration>=0.02&&bytes*2+1024<=LIMITS.animatedBytes){
+                    // libwebp collapses a still video to a static image. Preserve its timeline (and any audio) with two identical frames.
+                    const total=Math.round(duration*1000), first=Math.floor(total/2);
+                    const frames=await Promise.all([first,total-first].map(delay=>WebP.Image.generateFrame({path:encoded,delay,blend:false,dispose:false})));
+                    await WebP.Image.save(output,{width:512,height:512,loops:0,frames,exif:stickerExif()});
+                    const result=await checkSticker(output,true);
+                    if(result) return result;
+                    lastFailure='size';continue;
+                }
                 const visual=animationInfo(meta,{candidate:true});
                 // A failed candidate must never prevent trying a smaller profile.
                 const validDuration=animated&&visual.durationMs<=LIMITS.durationMs&&Math.abs(visual.durationMs-duration*1000)<=Math.max(100,2000/fps);
-                console.info('Sticker perfil '+JSON.stringify({fps,quality,detail:size,bytes,durationMs:visual.durationMs,frames:visual.pages,accepted:false}));
+                console.info('Sticker perfil '+JSON.stringify({fps,quality,detail:size,bytes,durationMs:visual.durationMs,frames:visual.pages}));
                 if(!validDuration){lastFailure='duration';continue;}
                 if(bytes>LIMITS.animatedBytes){lastFailure='size';continue;}
                 await addExif(encoded,output);
