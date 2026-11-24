@@ -23,7 +23,7 @@ async function jsonAt(url,domain,end,fetcher){
     return JSON.parse(await readBounded(res,metadataLimit));
 }
 async function expand(platform,input,end,fetcher){
-    if(!input.short||!['tiktok','pinterest'].includes(platform))return input;
+    if(!input.short||!['tiktok','pinterest','instagram'].includes(platform))return input;
     const {res,url}=await safeResponse(input.url,v=>socialUrl(platform,v).url,{fetcher,signal:AbortSignal.timeout(remaining(end,12000))});
     await res.body?.cancel();
     const target=socialUrl(platform,url);
@@ -95,7 +95,7 @@ export async function normalizeSocialFile(path,kind,dir,{limit,runner=run,end=Da
     const bytes=await checkedSize(out,limit),verified=await probe(out,runner,end);
     const v=verified.streams?.find(s=>s.codec_type==='video'&&!s.disposition?.attached_pic),a=verified.streams?.find(s=>s.codec_type==='audio');
     const actual=Number(verified.format?.duration);
-    if(!Number.isFinite(actual)||Math.abs(actual-seconds)>Math.max(0.5,seconds*0.01)||(kind==='audio'?a?.codec_name!=='mp3'||v:!v||v.codec_name!=='h264'||(audio&&a?.codec_name!=='aac')))throw new DownloadError('format','La conversión no conservó el contenido completo.');
+    if(!Number.isFinite(actual)||Math.abs(actual-seconds)>Math.max(0.5,Math.min(1,seconds*0.01))||(kind==='audio'?a?.codec_name!=='mp3'||v:!v||v.codec_name!=='h264'||(audio&&a?.codec_name!=='aac')))throw new DownloadError('format','La conversión no conservó el contenido completo.');
     return {kind,path:out,mime:kind==='audio'?'audio/mpeg':'video/mp4',bytes};
 }
 async function localVideo(input,kind,dir,limit,runner,end){
@@ -115,6 +115,7 @@ export async function withSocialDownload(platform,query,{kind='video',position}=
         let sent=0,total=0;
         try{
             const input=await expand(platform,initial,end,fetcher);
+            if(platform==='instagram'&&kind==='video'&&input.photo)throw new DownloadError('input','Utiliza #post para publicaciones de Instagram.');
             let items;
             if(platform==='instagram'&&kind==='post'){
                 items=instagramItems(await jsonAt('https://api.bk9.dev/download/instagram?url='+encodeURIComponent(input.url),'api.bk9.dev',end,fetcher));
@@ -122,7 +123,7 @@ export async function withSocialDownload(platform,query,{kind='video',position}=
                 items=twitterItems(await jsonAt('https://api.fxtwitter.com/status/'+input.id,'api.fxtwitter.com',end,fetcher));
             }else if(platform==='pinterest'){
                 items=await pinterestMedia(input,end,fetcher);
-                if(items[0]?.kind==='video')items=undefined; // use supported extractor for video
+                if(!items.length||items[0]?.kind==='video')items=undefined; // use supported extractor for video
             }else if(platform==='tiktok'&&input.photo){
                 const data=await photoTikTok(input,dir,end,runner);
                 items=kind==='audio'?(data.music?[{kind:'audio',url:data.music}]:[]):data.items;

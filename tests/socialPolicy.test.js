@@ -9,6 +9,7 @@ test('public links and short links for all five platforms',()=>{
     assert.equal(socialUrl('tiktok','https://www.tiktok.com/@test/photo/123').photo,true);
     assert.equal(socialUrl('tiktok','https://vm.tiktok.com/abc/').short,true);
     assert.equal(socialUrl('instagram','https://instagram.com/reels/ABC/?igsh=abc').url,'https://www.instagram.com/reel/ABC/');
+    assert.equal(socialUrl('instagram','https://www.instagram.com/share/reel/AbC/').short,true);
     assert.equal(socialUrl('facebook','https://m.facebook.com/watch?v=123&ref=foo').url,'https://www.facebook.com/watch/?v=123');
     assert.equal(socialUrl('facebook','https://fb.watch/abc/').short,true);
     assert.equal(socialUrl('twitter','https://twitter.com/test/status/123/photo/1').id,'123');

@@ -38,5 +38,42 @@ await withTemp(async dir=>{
     }
     assert.equal(invokes,3);
     await assert.rejects(withSocialDownload('instagram','https://instagram.com/p/ABC/',{kind:'post'},async(_item,i)=>{if(i===1)throw Error('send');},{fetcher}),/Se enviaron 1 de 2/);
+    const xphoto='https://pbs.twimg.com/media/a.png',xvideo='https://video.twimg.com/a.mp4';
+    const twitterFetch=async url=>{
+        if(url.startsWith('https://api.fxtwitter.com/'))return Response.json({code:200,tweet:{media:{all:[{type:'photo',url:xphoto},{type:'video',url:xvideo}]}}});
+        if(url===xphoto)return new Response(picture);
+        if(url===xvideo)return new Response(movie);
+        throw Error('unexpected x url');
+    };
+    const kinds=[];
+    await withSocialDownload('twitter','https://x.com/test/status/123',{kind:'post'},async item=>kinds.push(item.kind),{fetcher:twitterFetch});
+    assert.deepEqual(kinds,['image','video']);
+    const pinImage='https://i.pinimg.com/originals/a.png';
+    const pinFetch=async url=>{
+        if(url==='https://pin.it/abc')return new Response(null,{status:302,headers:{location:'https://www.pinterest.com/pin/123/'}});
+        if(url==='https://www.pinterest.com/pin/123/')return new Response('<meta property="og:image" content="'+pinImage+'">');
+        if(url===pinImage)return new Response(picture);
+        throw Error('unexpected pin url');
+    };
+    await withSocialDownload('pinterest','https://pin.it/abc',{kind:'post'},async item=>assert.equal(item.kind,'image'),{fetcher:pinFetch});
+    const tphoto='https://p16.tiktokcdn.com/a.png',taudio='https://a.tiktokcdn.com/a.mp3';
+    const audio=join(dir,'fixture.mp3');
+    await run(ffmpeg,['-v','error','-f','lavfi','-i','sine=frequency=440','-t','2','-c:a','libmp3lame','-y',audio]);
+    const sound=await readFile(audio);
+    const tRunner=async(bin,args,opts)=>{
+        if(bin===process.execPath&&args[0].endsWith('tiktok-public-photos.js'))return {stdout:JSON.stringify({items:[{kind:'image',url:tphoto}],music:taudio})};
+        return run(bin,args,opts);
+    };
+    const tFetch=async url=>{
+        if(url===tphoto)return new Response(picture);
+        if(url===taudio)return new Response(sound);
+        throw Error('unexpected tiktok url');
+    };
+    await withSocialDownload('tiktok','https://www.tiktok.com/@test/photo/123',{kind:'video'},async item=>assert.equal(item.kind,'image'),{runner:tRunner,fetcher:tFetch});
+    await withSocialDownload('tiktok','https://www.tiktok.com/@test/photo/123',{kind:'audio'},async item=>assert.equal(item.kind,'audio'),{runner:tRunner,fetcher:tFetch});
+    const webm=join(dir,'fixture.webm');
+    await run(ffmpeg,['-v','error','-f','lavfi','-i','testsrc2=size=160x120:rate=15','-t','2','-c:v','libvpx-vp9','-threads','2','-y',webm]);
+    const converted=await normalizeSocialFile(webm,'video',dir,{limit:10*1024*1024,index:99});
+    assert.equal(converted.mime,'video/mp4');
     console.log('Social media routing, mixed carousel, silent MP4, partial errors and cleanup verified');
 });
