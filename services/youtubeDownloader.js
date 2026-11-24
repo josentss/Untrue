@@ -1,204 +1,97 @@
-import { writeFileSync, unlinkSync, existsSync } from 'fs';
-import { join } from 'path';
-import { tmpdir } from 'os';
+import { createWriteStream } from 'node:fs';
+import { stat, unlink, mkdtemp, rm } from 'node:fs/promises';
+import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { platformUrl } from '../core/urls.js';
+import { run } from '../core/process.js';
+import { ytDlp, ffprobe, maxInputBytes } from '../core/config.js';
 
-const COBALT_API = (process.env.COBALT_API_URL || '').replace(/\/$/, '');
-const COBALT_KEY = process.env.COBALT_API_KEY || '';
-
-function formatDuration(seconds) {
-    if (!seconds || isNaN(seconds)) return 'N/A';
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.floor(seconds % 60);
-    return h > 0
-        ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-        : `${m}:${String(s).padStart(2, '0')}`;
+const api = process.env.COBALT_API_URL;
+const apiKey = process.env.COBALT_API_KEY;
+function duration(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 0) return 'N/A';
+    const s = Math.floor(seconds);
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 }
-
-function isYoutubeUrl(text) {
-    return /youtube\.com|youtu\.be/i.test(text);
+async function resolveInfo(args) {
+    const q = Array.isArray(args) ? args.join(' ').trim() : String(args || '').trim();
+    if (!q || q.length > 2048) throw Error('Consulta inválida');
+    const input = /^https?:/i.test(q) ? platformUrl(q, ['youtube.com','youtu.be']) : 'ytsearch1:' + q.slice(0,300);
+    const { stdout } = await run(ytDlp, ['--ignore-config','--no-playlist','--socket-timeout','10','--retries','0','--skip-download','--dump-single-json','--',input], {timeout:25000,maxOutput:8*1024*1024});
+    const json = JSON.parse(stdout);
+    const info = json.entries?.[0] || json;
+    return { url: platformUrl(info.webpage_url || info.original_url,['youtube.com','youtu.be']), title: info.title || 'YouTube', author: info.uploader || info.channel || 'Desconocido', duration: info.duration || 0, durationFormatted: duration(info.duration), description: info.description || '' };
 }
-
-async function resolveYoutubeUrl(queryOrUrl) {
-    const q = Array.isArray(queryOrUrl) ? queryOrUrl.join(' ') : String(queryOrUrl).trim();
-
-    if (isYoutubeUrl(q)) {
-        const match = q.match(/https?:\/\/[^\s]+/);
-        return match ? match[0] : q;
-    }
-
-    try {
-        const play = (await import('play-dl')).default;
-        const results = await play.search(q, { limit: 1 });
-        if (results?.length && results[0].url) {
-            return results[0].url;
+async function resolveUrl(args) {
+    const q = Array.isArray(args) ? args.join(' ').trim() : String(args || '').trim();
+    if (/^https?:/i.test(q)) return {url:platformUrl(q,['youtube.com','youtu.be']),title:'YouTube',author:'Desconocido',durationFormatted:'N/A'};
+    return resolveInfo(q);
+}
+function trustedDownload(value, origin) {
+    const u = new URL(value);
+    if (u.username || u.password || u.protocol !== 'https:') throw Error('Destino de descarga no permitido');
+    if (u.origin === origin) return u;
+    const hosts = (process.env.COBALT_MEDIA_HOSTS || '').split(',').map(x=>x.trim().toLowerCase()).filter(Boolean);
+    if (u.port || !hosts.some(h=>u.hostname === h || u.hostname.endsWith('.'+h))) throw Error('Dominio de descarga no autorizado');
+    return u;
+}
+async function request(body) {
+    if (!api) throw Error('Proveedor no configurado');
+    const url = new URL(api);
+    if (url.protocol !== 'https:' || url.username || url.password) throw Error('Proveedor inválido');
+    const headers = { Accept:'application/json','Content-Type':'application/json' };
+    if (apiKey) headers.Authorization = 'Api-Key ' + apiKey;
+    const res = await fetch(url,{method:'POST',headers,body:JSON.stringify(body),signal:AbortSignal.timeout(20000),redirect:'error'});
+    if (!res.ok) throw Error('Proveedor no disponible');
+    const data = await res.json();
+    if (!['tunnel','redirect'].includes(data.status) || typeof data.url !== 'string') throw Error('Proveedor no devolvió un archivo');
+    return { ...data, origin:url.origin };
+}
+async function download(data,path) {
+    let url = trustedDownload(data.url,data.origin);
+    const signal = AbortSignal.timeout(90000);
+    for (let i=0;i<4;i++) {
+        const headers = url.origin === data.origin && apiKey ? {Authorization:'Api-Key '+apiKey} : {};
+        const res = await fetch(url,{headers,signal,redirect:'manual'});
+        if ([301,302,303,307,308].includes(res.status)) {
+            await res.body?.cancel();
+            url = trustedDownload(new URL(res.headers.get('location'),url).href,data.origin); continue;
         }
-    } catch (e) {
-        console.error('Search failed:', e.message);
+        if (!res.ok || !res.body || Number(res.headers.get('content-length')) > maxInputBytes) {
+            await res.body?.cancel(); throw Error('Archivo no disponible o demasiado grande');
+        }
+        let bytes=0;
+        const limit=new Transform({transform(chunk,_enc,cb){bytes+=chunk.length;cb(bytes>maxInputBytes?Error('Archivo demasiado grande'):null,chunk);}});
+        await pipeline(Readable.fromWeb(res.body),limit,createWriteStream(path,{flags:'wx'}),{signal});
+        if (!bytes) throw Error('Archivo vacío');
+        return;
     }
-
-    throw new Error('No se encontró el video. Usa un enlace de YouTube.');
+    throw Error('Demasiadas redirecciones');
 }
-
-async function cobaltRequest(body) {
-    if (!COBALT_API) {
-        throw new Error('COBALT_API_URL no está configurada');
-    }
-
-    const headers = {
-        Accept: 'application/json',
-        'Content-Type': 'application/json'
-    };
-
-    if (COBALT_KEY) {
-        headers.Authorization = `Api-Key ${COBALT_KEY}`;
-    }
-
-    const res = await fetch(`${COBALT_API}/`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body)
-    });
-
-    let data;
+async function inspect(path, audio) {
+    const {stdout}=await run(ffprobe,['-v','error','-show_format','-show_streams','-of','json',path],{timeout:15000,maxOutput:1024*1024});
+    const info=JSON.parse(stdout);
+    const streams=info.streams || [];
+    if (audio ? !streams.some(s=>s.codec_type==='audio' && s.codec_name==='mp3') : !streams.some(s=>s.codec_type==='video' && s.codec_name==='h264')) throw Error('Formato multimedia no compatible');
+    if (!audio && !String(info.format?.format_name).includes('mp4')) throw Error('Contenedor no compatible');
+    return Number(info.format?.duration);
+}
+async function getMedia(args,audio) {
+    const info=await resolveUrl(args);
+    const dir=await mkdtemp(join(tmpdir(),'untrue-yt-'));
+    const filePath=join(dir,audio?'media.mp3':'media.mp4');
     try {
-        data = await res.json();
-    } catch {
-        throw new Error(`Cobalt no respondió JSON (${res.status})`);
-    }
-
-    if (data.status === 'error') {
-        const code = data.error?.code || 'unknown';
-        throw new Error(`Cobalt: ${code}`);
-    }
-
-    if (data.status === 'tunnel' || data.status === 'redirect') {
-        return data;
-    }
-
-    if (data.status === 'picker' && Array.isArray(data.picker) && data.picker.length) {
-        const item = data.picker.find(p => p.type === 'video') || data.picker[0];
-        return {
-            status: 'redirect',
-            url: item.url,
-            filename: data.filename || 'media'
-        };
-    }
-
-    throw new Error(`Respuesta Cobalt no soportada: ${data.status || res.status}`);
+        const data=await request({url:info.url,downloadMode:audio?'audio':'auto',...(audio?{audioFormat:'mp3',audioBitrate:'128'}:{videoQuality:'480',youtubeVideoCodec:'h264',youtubeVideoContainer:'mp4'}),filenameStyle:'basic'});
+        await download(data,filePath);
+        const seconds=await inspect(filePath,audio);
+        if (!(await stat(filePath)).size) throw Error('Archivo vacío');
+        return {filePath,videoInfo:{...info,title:info.title==='YouTube'?(data.filename?.replace(/\.[^.]+$/,'')||info.title):info.title,duration:seconds,durationFormatted:duration(seconds)}};
+    } catch(e) { await rm(dir,{recursive:true,force:true}); throw e; }
 }
-
-async function downloadToFile(url, destPath) {
-    const headers = {};
-    if (COBALT_KEY) {
-        headers.Authorization = `Api-Key ${COBALT_KEY}`;
-    }
-
-    const res = await fetch(url, { headers });
-
-    if (!res.ok) {
-        throw new Error(`Error descargando archivo (${res.status})`);
-    }
-
-    const buffer = Buffer.from(await res.arrayBuffer());
-    if (!buffer.length) {
-        throw new Error('Archivo vacío');
-    }
-
-    writeFileSync(destPath, buffer);
-    return destPath;
-}
-
-function defaultInfo(url, filename) {
-    return {
-        title: filename ? filename.replace(/\.[^.]+$/, '') : 'YouTube',
-        author: 'Desconocido',
-        duration: 0,
-        durationFormatted: 'N/A',
-        url
-    };
-}
-
-export async function getYouTubeVideoInfo(queryOrUrl) {
-    const url = await resolveYoutubeUrl(queryOrUrl);
-    return { ...defaultInfo(url), url };
-}
-
-export async function downloadYoutubeAudio(args, format = 'mp3') {
-    const url = await resolveYoutubeUrl(args);
-    console.log(`Cobalt audio: ${url}`);
-
-    const data = await cobaltRequest({
-        url,
-        downloadMode: 'audio',
-        audioFormat: format === 'm4a' ? 'best' : 'mp3',
-        audioBitrate: '128',
-        filenameStyle: 'basic'
-    });
-
-    if (!data.url) {
-        throw new Error('Cobalt no devolvió URL de descarga');
-    }
-
-    const ext = format === 'm4a' ? 'm4a' : 'mp3';
-    const filePath = join(tmpdir(), `yt-audio-${Date.now()}.${ext}`);
-    await downloadToFile(data.url, filePath);
-
-    if (!existsSync(filePath)) {
-        throw new Error('No se guardó el archivo de audio');
-    }
-
-    return {
-        filePath,
-        videoInfo: defaultInfo(url, data.filename)
-    };
-}
-
-export async function downloadYoutubeVideo(args) {
-    const url = await resolveYoutubeUrl(args);
-    console.log(`Cobalt video: ${url}`);
-
-    const data = await cobaltRequest({
-        url,
-        downloadMode: 'auto',
-        videoQuality: '480',
-        youtubeVideoCodec: 'h264',
-        youtubeVideoContainer: 'mp4',
-        filenameStyle: 'basic'
-    });
-
-    if (!data.url) {
-        throw new Error('Cobalt no devolvió URL de descarga');
-    }
-
-    const filePath = join(tmpdir(), `yt-video-${Date.now()}.mp4`);
-    await downloadToFile(data.url, filePath);
-
-    if (!existsSync(filePath)) {
-        throw new Error('No se guardó el archivo de video');
-    }
-
-    return {
-        filePath,
-        videoInfo: defaultInfo(url, data.filename)
-    };
-}
-
-export async function cleanUpFile(filePath) {
-    if (!filePath || !existsSync(filePath)) return;
-    try {
-        unlinkSync(filePath);
-    } catch {}
-}
-
-export async function getYoutubeInfo(query) {
-    return getYouTubeVideoInfo(query);
-}
-
-export default {
-    downloadYoutubeVideo,
-    downloadYoutubeAudio,
-    cleanUpFile,
-    getYoutubeInfo,
-    getYouTubeVideoInfo
-};
+export const downloadYoutubeAudio = args => getMedia(args,true);
+export const downloadYoutubeVideo = args => getMedia(args,false);
+export const getYoutubeInfo = resolveInfo;
+export const getYouTubeVideoInfo = resolveInfo;
+export async function cleanUpFile(path) { if(path) await rm(dirname(path),{recursive:true,force:true}); }

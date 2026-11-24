@@ -50,7 +50,7 @@ export async function connectToWhatsApp() {
             pendingCredentials = pendingCredentials.then(() => saveCreds()).catch(() => logger.error('No se pudieron guardar las credenciales'));
         });
         sock.ev.on('connection.update', update => {
-            if (epoch !== generation || stopping) return;
+            if (epoch !== generation || stopping || socket !== sock) return;
             const { connection, qr, lastDisconnect } = update;
             if (qr) {
                 status = 'awaiting_qr';
@@ -69,7 +69,7 @@ export async function connectToWhatsApp() {
             }
         });
         sock.ev.on('messages.upsert', ({ messages, type }) => {
-            if (epoch !== generation || stopping) return;
+            if (epoch !== generation || stopping || socket !== sock) return;
             for (const raw of messages || []) {
                 if (raw.key?.fromMe) cacheMessage(raw);
                 if (type !== 'notify' || status !== 'connected') continue;

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import fs from 'node:fs';
 import axios from 'axios';
 import ffmpeg from 'fluent-ffmpeg';
-import { path as ffmpegPath } from '@ffmpeg-installer/ffmpeg';
+import { ffmpeg as ffmpegPath } from '../core/config.js';
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 

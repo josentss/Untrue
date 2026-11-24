@@ -65,7 +65,6 @@ export async function youtubeAudioCommand(sock, m, args, format = 'mp3') {
                   'Uso:\n' +
                   '  #yta <URL>\n' +
                   '  #yta <búsqueda>\n\n' +
-                  'Formatos disponibles:\n' +
                   '  #yta <búsqueda> (MP3)\n\n' +
                   'Ejemplos:\n' +
                   '  #yta bad bunny tití\n' +

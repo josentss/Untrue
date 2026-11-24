@@ -34,3 +34,9 @@ test('argumentos literales sin shell y limpieza temporal', async () => {
     await assert.rejects(withTemp(async path => { dir = path; throw Error('expected'); }), /expected/);
     await assert.rejects(access(dir));
 });
+
+import { platformUrl } from '../core/urls.js';
+test('validación estricta de dominios',()=>{
+    assert.equal(platformUrl('https://youtu.be/abc',['youtu.be']),'https://youtu.be/abc');
+    for (const url of ['https://youtu.be.evil.test/a','https://evil.test/?youtube.com','https://user@youtu.be/a','file:///tmp/a','https://youtu.be:123/a']) assert.throws(()=>platformUrl(url,['youtu.be','youtube.com']));
+});

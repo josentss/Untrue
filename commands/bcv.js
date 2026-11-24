@@ -24,8 +24,8 @@ export async function bcvCommand(sock, m) {
 
     try {
         const [resUsd, resEur] = await Promise.all([
-            axios.get(`${BASE_URL}/${API_KEY}/latest/USD`),
-            axios.get(`${BASE_URL}/${API_KEY}/latest/EUR`)
+            axios.get(`${BASE_URL}/${API_KEY}/latest/USD`, { timeout: 10000 }),
+            axios.get(`${BASE_URL}/${API_KEY}/latest/EUR`, { timeout: 10000 })
         ]);
 
         if (resUsd.data.result !== 'success' || resEur.data.result !== 'success') {
@@ -41,7 +41,7 @@ export async function bcvCommand(sock, m) {
         });
 
         const text =
-            `*Tasas BCV*\n\n` +
+            `*Tasas de referencia (ExchangeRate-API)*\n\n` +
             `USD: ${usd.toFixed(4)} Bs\n` +
             `EUR: ${eur.toFixed(4)} Bs\n` +
             `Fecha: ${fecha}`;
