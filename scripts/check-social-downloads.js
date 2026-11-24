@@ -3,6 +3,7 @@ import sharp from 'sharp';
 import {join} from 'node:path';
 import {readFile,copyFile,access,writeFile} from 'node:fs/promises';
 import {withTemp,run} from '../core/process.js';
+import {createPostGate} from '../core/instagramPostPolicy.js';
 import {ffmpeg,ytDlp,galleryPython} from '../core/config.js';
 import {withSocialDownload as download,pinterestItems,pinDataItems,instagramPublicItems,normalizeSocialFile} from '../services/socialDownloader.js';
 const withSocialDownload=(p,q,o,c,deps={})=>download(p,q,o,c,{...deps,gallery:false});
@@ -163,17 +164,18 @@ await withTemp(async dir=>{
         else await writeFile(join(folder,'manifest.txt'),one+'\n');
         return {stdout:'',stderr:''};
     };
+    const igUnavailable=async url=>{if(url.includes('/embed/'))return new Response(null,{status:404});throw Error('unexpected provider');};
     const gKinds=[];
-    await download('instagram','https://instagram.com/p/ABC/',{kind:'post'},async item=>gKinds.push(item.kind),{runner:galleryRunner,fetcher:async()=>assert.fail('gallery success must not use BK9')});
+    await download('instagram','https://instagram.com/p/ABC/',{kind:'post'},async item=>gKinds.push(item.kind),{runner:galleryRunner,fetcher:igUnavailable});
     assert.deepEqual(gKinds,['image','video']);
     await download('tiktok','https://www.tiktok.com/@test/photo/123',{kind:'video'},async item=>assert.equal(item.kind,'image'),{runner:galleryRunner});
     await download('pinterest','https://pin.it/abc',{kind:'post'},async item=>assert.equal(item.kind,'image'),{runner:galleryRunner,fetcher:async()=>{throw new DOMException('timed out','TimeoutError');}});
     let fallbackCalls=0;
     await download('instagram','https://instagram.com/p/ABC/',{kind:'post'},async()=>{},{
-        runner:async(bin,args,opts)=>{if(bin===galleryPython){fallbackCalls++;throw Error('gallery unavailable');}return run(bin,args,opts);},fetcher});
+        runner:async(bin,args,opts)=>{if(bin===galleryPython){fallbackCalls++;throw Error('gallery unavailable');}return run(bin,args,opts);},fetcher:async url=>url.includes('/embed/')?new Response(null,{status:404}):fetcher(url)});
     assert.equal(fallbackCalls,1);
     await assert.rejects(download('instagram','https://instagram.com/p/ABC/',{kind:'post'},async()=>assert.fail('restricted'),{
-        runner:async()=>{throw Object.assign(Error('gallery failed'),{diagnostic:'login required'});},fetcher:async()=>assert.fail('no fallback on restricted')}),{code:'restricted'});
+        runner:async()=>{throw Object.assign(Error('gallery failed'),{diagnostic:'login required'});},fetcher:igUnavailable}),{code:'restricted'});
     const originalPinVideo=async(bin,args,opts)=>{
         if(bin!==galleryPython)return run(bin,args,opts);
         const folder=args[args.indexOf('--directory')+1],path=join(folder,'video.mp4');
@@ -185,9 +187,34 @@ await withTemp(async dir=>{
         const mp4=await readFile(item.path);assert.ok(mp4.indexOf('moov')<mp4.indexOf('mdat'));
     },{runner:originalPinVideo,fetcher:async()=>assert.fail('gallery success must not use another provider')});
     await assert.rejects(download('instagram','https://instagram.com/p/ABC/',{kind:'post'},async()=>assert.fail('rate limited'),{
-        runner:async()=>{throw Object.assign(Error('gallery failed'),{diagnostic:'UNTRUE_RATE_LIMIT'});},fetcher:async()=>assert.fail('no fallback on rate limit')}),{code:'remote_limit'});
+        runner:async()=>{throw Object.assign(Error('gallery failed'),{diagnostic:'UNTRUE_INSTAGRAM_HTTP_429 retry_after_ms=1000000'});},instagramGate:createPostGate(),fetcher:igUnavailable}),{code:'remote_limit'});
     let deliveries=0;
-    await assert.rejects(download('instagram','https://instagram.com/p/ABC/',{kind:'post'},async()=>{deliveries++;throw Error('send failed');},{runner:galleryRunner,fetcher:async()=>assert.fail('no fallback on send error')}),{code:'send'});
+    await assert.rejects(download('instagram','https://instagram.com/p/ABC/',{kind:'post'},async()=>{deliveries++;throw Error('send failed');},{runner:galleryRunner,fetcher:igUnavailable}),{code:'send'});
     assert.equal(deliveries,1);
+    // New post path: public embed wins, rate limit stops the pipeline, API key
+    // never crosses to media hosts, and invalid carousel count never sends.
+    let callsPost=0;
+    await download('instagram','https://instagram.com/p/ABC/',{kind:'post',position:2},async item=>assert.equal(item.kind,'video'),{
+        runner:async(bin,args,opts)=>{assert.notEqual(bin,galleryPython);return run(bin,args,opts);},
+        fetcher:async url=>{callsPost++;return url.includes('/embed/')?new Response(embedHtml):fetcher(url);}});
+    assert.equal(callsPost,2);
+    let now=0,limitedCalls=0;const gate=createPostGate({now:()=>now});
+    const rateDeps={instagramGate:gate,fetcher:async()=>{limitedCalls++;return new Response(null,{status:429,headers:{'Retry-After':'1800'}});},runner:async()=>assert.fail('no fallback')};
+    await assert.rejects(download('instagram','https://instagram.com/p/ABC/',{kind:'post'},async()=>assert.fail('no send'),rateDeps),{code:'remote_limit'});
+    await assert.rejects(download('instagram','https://instagram.com/p/DEF/',{kind:'post'},async()=>assert.fail('no send'),rateDeps),{code:'remote_limit'});
+    assert.equal(limitedCalls,1);now=1800001;
+    const apiKinds=[];
+    await download('instagram','https://instagram.com/p/ABC/',{kind:'post'},async item=>apiKinds.push(item.kind),{
+        instagramProvider:'apidirect',instagramKey:'test-key',instagramGate:createPostGate(),
+        fetcher:async(url,opts)=>{
+            if(url.startsWith('https://apidirect.io/')){
+                assert.equal(opts.headers['X-API-Key'],'test-key');assert.equal(opts.redirect,'manual');
+                assert.equal(new URL(url).searchParams.get('code'),'ABC');
+                return Response.json({post:{url:'https://instagram.com/p/ABC/',media_type:'carousel_container',carousel_media_count:2,carousel_media:[{is_video:false,image_url:a},{is_video:true,video_url:b}]}});
+            }
+            assert.ok(!opts.headers['X-API-Key']);return fetcher(url);
+        }
+    });
+    assert.deepEqual(apiKinds,['image','video']);
     console.log('Social media routing, mixed carousel, silent MP4, partial errors and cleanup verified');
 });

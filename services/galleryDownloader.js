@@ -4,6 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {run} from '../core/process.js';
 import {galleryPython} from '../core/config.js';
 import {childEnv} from './musicDownloader.js';
+import {postError} from '../core/instagramPostPolicy.js';
 import {DownloadError,publicError} from '../core/downloadPolicy.js';
 const script=fileURLToPath(new URL('../scripts/gallery-public.py',import.meta.url));
 function galleryError(e){
@@ -54,7 +55,7 @@ export async function galleryFiles(platform,url,dir,kind,{runner=run,limit,timeo
         if(controller.signal.aborted)throw controller.signal.reason;
         // A successful process may still have reported extraction/download errors.
         const diagnostics=String(result.stderr||'');
-        if(/UNTRUE_(?:ACCESS_RESTRICTED|RATE_LIMIT)|\b(?:error|critical)\b/i.test(diagnostics)||/failed to (?:download|extract)|unsupported story block|error when extracting/i.test(diagnostics))throw Object.assign(Error('gallery failed'),{diagnostic:diagnostics});
+        if(/UNTRUE_(?:ACCESS_RESTRICTED|RATE_LIMIT|INSTAGRAM_HTTP_\d+)|\b(?:error|critical)\b/i.test(diagnostics)||/failed to (?:download|extract)|unsupported story block|error when extracting/i.test(diagnostics))throw Object.assign(Error('gallery failed'),{diagnostic:diagnostics});
         const names=(await readFile(join(dir,'manifest.txt'),'utf8').catch(()=> '')).trim().split(/\r?\n/).filter(Boolean);
         if(!names.length)throw unsupported();
         if(names.length>20)throw new DownloadError('size','La publicación supera los 20 archivos.');
@@ -73,6 +74,6 @@ export async function galleryFiles(platform,url,dir,kind,{runner=run,limit,timeo
         // Do not silently accept missing manifest entries or interrupted downloads.
         for(const name of await readdir(dir))if(name!=='manifest.txt'&&!seen.has(join(dir,name)))throw unsupported();
         return files;
-    }catch(e){throw galleryError(e);}
+    }catch(e){throw platform==='instagram'?postError(e):galleryError(e);}
     finally{clearInterval(timer);if(controller.signal.aborted)await rm(dir,{recursive:true,force:true});}
 }

@@ -2,6 +2,8 @@
 No credentials, browser profiles, proxy, custom extractors or user options.
 """
 import sys
+import time
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 import requests
 import gallery_dl
@@ -18,7 +20,8 @@ DOMAINS = {
 
 if len(sys.argv) < 3 or sys.argv[1] not in DOMAINS:
     raise SystemExit(2)
-domains = DOMAINS[sys.argv.pop(1)]
+platform = sys.argv.pop(1)
+domains = DOMAINS[platform]
 original_send = requests.sessions.Session.send
 
 def guarded_send(session, request, **kwargs):
@@ -30,7 +33,17 @@ def guarded_send(session, request, **kwargs):
     # Requests invokes Session.send again for each redirect.
     response = original_send(session, request, **kwargs)
     if response.status_code in (401, 403, 429):
-        print('UNTRUE_ACCESS_RESTRICTED' if response.status_code != 429 else 'UNTRUE_RATE_LIMIT', file=sys.stderr)
+        if platform == "instagram":
+            retry = 0
+            if response.status_code == 429:
+                value = response.headers.get("Retry-After", "")
+                try:
+                    retry = int(value) * 1000 if value.isdigit() else max(0, int((parsedate_to_datetime(value).timestamp() - time.time()) * 1000))
+                except (TypeError, ValueError, OverflowError):
+                    pass
+            print("UNTRUE_INSTAGRAM_HTTP_%d retry_after_ms=%d" % (response.status_code, retry), file=sys.stderr, flush=True)
+        else:
+            print('UNTRUE_ACCESS_RESTRICTED' if response.status_code != 429 else 'UNTRUE_RATE_LIMIT', file=sys.stderr)
         response.close()
         raise requests.exceptions.HTTPError('HTTP Error %s' % response.status_code, response=response)
     return response
