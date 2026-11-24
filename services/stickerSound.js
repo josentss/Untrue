@@ -19,12 +19,13 @@ export async function prepareStickerAudio(input,dir,durationMs){
     const seconds=Math.min(visualSeconds,available);
     if(!Number.isFinite(seconds)||seconds<=0) return null;
     const path=join(dir,'sticker-audio.ogg');
-    await run(ffmpeg,['-hide_banner','-loglevel','error','-nostdin','-y','-protocol_whitelist','file,pipe','-format_whitelist','mov,matroska,webm,avi,mpeg,mpegts,mp3,wav,ogg,flac,aac','-i',input,'-map','0:a:0','-vn','-t',String(seconds),'-ac','1','-ar','48000','-c:a','libopus','-b:a','48k','-threads','2',path],{timeout:20000});
+    await run(ffmpeg,['-hide_banner','-loglevel','error','-nostdin','-y','-protocol_whitelist','file,pipe','-format_whitelist','mov,matroska,webm,avi,mpeg,mpegts,mp3,wav,ogg,flac,aac','-i',input,'-map','0:a:0','-vn','-t',String(seconds),'-ac','1','-ar','48000','-c:a','libopus','-b:a','48k','-vbr','off','-threads','2',path],{timeout:20000});
     const probe=await inspectMedia(path);
     if(!probe.streams?.some(s=>s.codec_name==='opus')||(await stat(path)).size>128*1024) throw new MediaError('No se pudo preparar el audio del sticker.');
     const duration=Number(probe.format.duration);
     if(!Number.isFinite(duration)||duration<=0||duration>seconds+0.1) throw new MediaError('Duración de audio inválida.');
-    return {path,seconds:Math.max(1,Math.ceil(Math.min(seconds,duration))),durationMs:Math.round(Math.min(seconds,duration)*1000)};
+    const effective=Math.min(seconds,Math.max(0,duration-0.0065));
+    return {path,seconds:Math.max(1,Math.ceil(effective-0.001)),durationMs:Math.round(effective*1000)};
 }
 export async function uploadStickerAudio(sock,clip){
     const prepared=await prepareWAMessageMedia({audio:{url:clip.path},mimetype:'audio/ogg; codecs=opus',seconds:clip.seconds,ptt:false},{upload:sock.waUploadToServer,logger,mediaUploadTimeoutMs:20000});

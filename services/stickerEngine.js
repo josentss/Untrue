@@ -6,7 +6,7 @@ import { run } from '../core/process.js';
 import { ffmpeg,ffprobe } from '../core/config.js';
 import { MediaError } from '../core/mediaTarget.js';
 
-export const LIMITS=Object.freeze({size:512,staticBytes:100*1024,animatedBytes:500*1024,durationMs:10000,frames:300,pixels:48*1024*1024,animationPixels:80*1024*1024});
+export const LIMITS=Object.freeze({size:512,staticBytes:100*1024,animatedBytes:500*1024,durationMs:15000,frames:450,pixels:48*1024*1024,animationPixels:120*1024*1024});
 const transparent={r:0,g:0,b:0,alpha:0};
 const mediaFormats='mov,matroska,webm,avi,mpeg,mpegts,mp3,wav,ogg,flac,aac';
 const inputArgs=['-protocol_whitelist','file,pipe','-format_whitelist',mediaFormats];
@@ -14,7 +14,7 @@ const sharpOptions={limitInputPixels:LIMITS.pixels,failOn:'error'};
 const animatedOptions={...sharpOptions,animated:true};
 const baseArgs=['-hide_banner','-loglevel','error','-nostdin','-y','-filter_threads','1','-threads','2'];
 const fitOptions= crop => ({fit:crop?'cover':'contain',background:transparent,position:'centre'});
-const deadline=()=>Date.now()+90000;
+const deadline=()=>Date.now()+120000;
 function remaining(end) {
     const ms=end-Date.now();
     if(ms<=0) throw new MediaError('Tiempo de conversión agotado.');
@@ -31,12 +31,12 @@ async function metadata(input) {
     // Read metadata without loading all pages; the default input pixel limit applies to one frame.
     return sharp(input,sharpOptions).metadata();
 }
-function animationInfo(meta) {
+function animationInfo(meta,{candidate=false}={}) {
     const pages=meta.pages||1;
     if (pages>LIMITS.frames) throw new MediaError('La animación contiene demasiados fotogramas.');
     const delays=pages>1?Array.from({length:pages},(_,i)=>Math.max(10,Number(meta.delay?.[i])||100)):[];
     const durationMs=delays.reduce((a,b)=>a+b,0);
-    if(durationMs>LIMITS.durationMs) throw new MediaError('Máximo 10 segundos de animación.');
+    if(!candidate&&durationMs>LIMITS.durationMs) throw new MediaError('Máximo 15 segundos de animación.');
     return {pages,delays,durationMs,animated:pages>1};
 }
 async function addExif(input,output) {
@@ -61,7 +61,7 @@ function videoDuration(info) {
     if(!video) throw new MediaError('El archivo no contiene video.');
     if(video.width*video.height>LIMITS.pixels) throw new MediaError('Resolución demasiado grande.');
     const duration=Number(video.duration||info.format?.duration);
-    if(!Number.isFinite(duration)||duration<=0||duration>10) throw new MediaError('Máximo 10 segundos de video.');
+    if(!Number.isFinite(duration)||duration<=0||duration>LIMITS.durationMs/1000) throw new MediaError('Máximo 15 segundos de video.');
     return duration;
 }
 function sourceFps(info) {
@@ -73,10 +73,10 @@ function sourceFps(info) {
     }
     return 24;
 }
-function videoFilter(size,fps,crop) {
-    return 'fps='+fps+',format=rgba,scale='+size+':'+size+':force_original_aspect_ratio='+(crop?'increase':'decrease')+
+function videoFilter(size,fps,crop,alpha) {
+    return 'fps='+fps+(alpha?',format=rgba':'')+',scale='+size+':'+size+':force_original_aspect_ratio='+(crop?'increase':'decrease')+
         (crop?',crop='+size+':'+size:',pad='+size+':'+size+':(ow-iw)/2:(oh-ih)/2:color=black@0')+
-        ',scale=512:512:flags=bilinear,setsar=1';
+        ',scale=512:512:flags=bilinear,setsar=1,format='+(alpha?'yuva420p':'yuv420p');
 }
 export async function createSticker(input,dir,{kind,crop=true}={}) {
     const end=deadline();
@@ -112,27 +112,48 @@ export async function createSticker(input,dir,{kind,crop=true}={}) {
         const duration=videoDuration(info);
         animated=true;
         const fpsSource=sourceFps(info);
-        // Prefer motion over detail when constrained by the conservative 500 KiB budget.
-        // Always encode a full 512x512 square; lower detail profiles pre-scale, not pad.
-        const long=duration>5;
-        const profiles=[[30,long?35:65,512],[30,long?18:35,320],[24,18,256],[18,12,224],[15,8,192],[12,8,160]];
+        const video=info.streams.find(s=>s.codec_type==='video'&&!s.disposition?.attached_pic);
+        const alpha=/^(?:rgba|bgra|argb|abgr|yuva|gbrap|ya)/.test(video.pix_fmt||'');
+        // Choose a stronger initial compression for long clips; preserve motion
+        // whenever possible, then reduce spatial detail and finally FPS.
+        const profiles=duration>10
+            ? [[30,35,384],[24,28,320],[20,18,224],[15,12,160],[12,8,112],[10,5,80],[8,0,64],[6,0,48]]
+            : [[30,duration>5?35:65,512],[30,duration>5?18:35,320],[24,18,256],[18,12,192],[15,8,144],[12,5,96],[10,0,64],[8,0,48],[6,0,48]];
         const attempted=new Set();
+        let smallest=Infinity, lastFailure='size';
         for(const [cap,quality,size] of profiles){
-            const fps=Math.min(fpsSource,cap);
+            // Integer rates keep exact 15-second sources within the duration limit.
+            const fps=Math.min(Math.max(1,Math.floor(fpsSource)),cap);
             const key=[fps,quality,size].join(':');
             if(attempted.has(key)) continue;
             attempted.add(key);
-            await run(ffmpeg,[...baseArgs,...inputArgs,'-i',input,'-map','0:v:0','-t',String(duration),'-an','-vf',videoFilter(size,fps,crop),'-c:v','libwebp_anim','-quality',String(quality),'-compression_level','3','-loop','0','-threads','2',encoded],{timeout:remaining(end)});
-            const meta=await metadata(encoded);
-            // Avoid re-muxing oversized candidates; EXIF is still included in the final size check.
-            animated=(meta.pages||1)>1;
-            if((await stat(encoded)).size>(animated?LIMITS.animatedBytes:LIMITS.staticBytes)) continue;
-            const visual=animationInfo(meta);
-            if(animated&&Math.abs(visual.durationMs-duration*1000)>Math.max(100,1000/fps+5)) continue;
-            await addExif(encoded,output);
-            const result=await checkSticker(output,animated);
-            if(result) return result;
+            let timeout;
+            try { timeout=remaining(end); }
+            catch { lastFailure='timeout'; break; }
+            try {
+                await run(ffmpeg,[...baseArgs,...inputArgs,'-i',input,'-map','0:'+video.index,'-t',String(duration),'-an','-vf',videoFilter(size,fps,crop,alpha),'-c:v','libwebp_anim','-quality',String(quality),'-compression_level','3','-loop','0','-threads','2',encoded],{timeout});
+                const bytes=(await stat(encoded)).size;
+                smallest=Math.min(smallest,bytes);
+                const meta=await metadata(encoded);
+                animated=(meta.pages||1)>1;
+                const visual=animationInfo(meta,{candidate:true});
+                // A failed candidate must never prevent trying a smaller profile.
+                const validDuration=animated&&visual.durationMs<=LIMITS.durationMs&&Math.abs(visual.durationMs-duration*1000)<=Math.max(100,2000/fps);
+                console.info('Sticker perfil '+JSON.stringify({fps,quality,detail:size,bytes,durationMs:visual.durationMs,frames:visual.pages,accepted:false}));
+                if(!validDuration){lastFailure='duration';continue;}
+                if(bytes>LIMITS.animatedBytes){lastFailure='size';continue;}
+                await addExif(encoded,output);
+                const result=await checkSticker(output,true);
+                if(result){ console.info('Sticker perfil seleccionado '+JSON.stringify({fps:result.fps,quality,detail:size,bytes:result.bytes})); return result; }
+                lastFailure='size';
+            } catch(error) {
+                // Only bounded categories, never stderr, local paths or user data.
+                lastFailure=error instanceof MediaError?'validation':'encoder';
+                console.warn('Sticker perfil fallido '+JSON.stringify({fps,quality,detail:size,reason:lastFailure}));
+            }
         }
+        console.warn('Sticker compresión agotada '+JSON.stringify({reason:lastFailure,attempts:attempted.size,smallestBytes:Number.isFinite(smallest)?smallest:null}));
+        throw new MediaError(lastFailure==='timeout'?'Se agotó el tiempo de compresión del sticker. Intenta con un video de menor resolución.':lastFailure==='size'?'El video tiene demasiado detalle para el límite de 500 KB del sticker. Prueba con un video más sencillo.':'No se pudo convertir el video en una animación compatible. Intenta con otro video.');
     } else throw new MediaError('Solo imágenes, GIF, videos o stickers WebP.');
     throw new MediaError('No se pudo comprimir el sticker dentro del límite de WhatsApp.');
 }
@@ -148,7 +169,7 @@ export async function convertWebp(input,dir,{audioPath}={}) {
     if(audioPath){
         const sound=await inspectMedia(audioPath);
         const seconds=Number(sound.format?.duration);
-        if(!sound.streams?.some(s=>s.codec_name==='opus')||!Number.isFinite(seconds)||seconds<=0||seconds>10.1) throw new MediaError('Audio de sticker no compatible.');
+        if(!sound.streams?.some(s=>s.codec_name==='opus')||!Number.isFinite(seconds)||seconds<=0||seconds>LIMITS.durationMs/1000+0.1) throw new MediaError('Audio de sticker no compatible.');
         if(!info.animated){
             const frame=join(dir,'still.png'),path=join(dir,'sticker.mp4');
             await sharp(input,sharpOptions).flatten({background:'#000000'}).png().toFile(frame);
