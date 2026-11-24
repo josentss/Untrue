@@ -62,7 +62,7 @@ export function pinDataItems(pin){
     for(const block of blocks)lists.push(block?.video?.video_list);
     const variants=lists.flatMap(list=>Object.values(list||{})).filter(v=>v&&typeof v==='object').sort((a,b)=>(b.width||0)*(b.height||0)-(a.width||0)*(a.height||0));
     const direct=variants.map(v=>validPinMedia(v.url,'video')).find(Boolean);
-    const video=Boolean(direct||pin.videos||blocks.some(b=>b?.video)||pin.is_video===true||pin.is_video_pin===true||pin.embed?.src||/video/i.test(String(pin.media_type||pin.pin_type||'')));
+    const video=Boolean(direct||Object.keys(pin.videos||{}).length||blocks.some(b=>b?.video)||pin.is_video===true||pin.is_video_pin===true||pin.embed?.src||/video/i.test(String(pin.media_type||pin.pin_type||'')));
     if(video)return {items:direct?[direct]:[],video:true,confirmedImage:false};
     if(pin.story_pin_data)return {items:[],video:false,confirmedImage:false}; // unsupported multi-block story, never its cover
     for(const key of ['orig','original','origin','736x','564x']){
@@ -97,7 +97,7 @@ export function pinterestPage(html,pinId){
     if(pin?.story_pin_data)return structured;
     const image=$('meta[property="og:image:secure_url"]').attr('content')||$('meta[property="og:image"]').attr('content');
     const item=validPinMedia(image,'image');
-    return {items:item?[item]:[],video:false,confirmedImage:false};
+    return {items:item?[item]:[],video:false,confirmedImage:Boolean(item&&/^(?:image|photo)$/i.test($('meta[property="og:type"]').attr('content')||''))};
 }
 export function pinterestItems(html,pinId){return pinterestPage(html,pinId).items;}
 async function pinterestMedia(input,end,fetcher){
@@ -291,7 +291,7 @@ export async function withSocialDownload(platform,query,{kind='video',position}=
             const input=await expand(platform,initial,end,fetcher);
             stage='provider';
             if(platform==='instagram'&&kind==='video'&&input.photo)throw new DownloadError('input','Utiliza #post para publicaciones de Instagram.');
-            let items,pinPoster;
+            let items;
             if(platform==='instagram'&&kind==='post'){
                 items=await instagramMedia(input,end,fetcher,{post:true});
             }else if(platform==='twitter'){
@@ -301,7 +301,6 @@ export async function withSocialDownload(platform,query,{kind='video',position}=
                 try{pin=await pinterestMedia(input,end,fetcher);}
                 catch(e){if(!canTryAlternative(e))throw e;}
                 if(pin?.video&&pin.items.length||pin?.confirmedImage)items=pin.items;
-                else if(pin&&!pin.video&&pin.items.length)pinPoster=pin.items;
                 // Ambiguous OpenGraph image is not enough: try the video extractor first.
             }else if(platform==='tiktok'&&input.photo){
                 const data=await photoTikTok(initial.short?initial:input,dir,end,runner);
@@ -311,15 +310,11 @@ export async function withSocialDownload(platform,query,{kind='video',position}=
                 let result;
                 try{result=await localVideo(input,kind==='audio'?'audio':'video',dir,limit,runner,end);}
                 catch(e){
-                    if(platform==='pinterest'&&pinPoster&&/no video formats found/i.test(e.diagnostic||'')){
-                        items=pinPoster;
-                    }else{
-                        if(platform!=='instagram'||kind!=='video'||!canTryAlternative(e))throw e;
-                        console.info('Instagram video proveedor local fallido '+JSON.stringify({reason:publicError(e).code}));
-                        const alternative=await instagramMedia(input,end,fetcher);
-                        if(alternative.length!==1||alternative[0].kind!=='video')throw notAvailable();
-                        items=alternative;
-                    }
+                    if(platform!=='instagram'||kind!=='video'||!canTryAlternative(e))throw e;
+                    console.info('Instagram video proveedor local fallido '+JSON.stringify({reason:publicError(e).code}));
+                    const alternative=await instagramMedia(input,end,fetcher);
+                    if(alternative.length!==1||alternative[0].kind!=='video')throw notAvailable();
+                    items=alternative;
                 }
                 if(result){
                     total=1;

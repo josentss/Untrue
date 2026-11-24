@@ -142,5 +142,9 @@ await withTemp(async dir=>{
         return pinFetch(url);
     };
     await withSocialDownload('pinterest','https://www.pinterest.com/pin/123/',{kind:'post'},async item=>assert.equal(item.kind,'video'),{runner,fetcher:ambiguousFetch});
+    await assert.rejects(withSocialDownload('pinterest','https://www.pinterest.com/pin/123/',{kind:'post'},async()=>assert.fail('ambiguous poster must not send'),{fetcher:ambiguousFetch,runner:async(bin,args,opts)=>{
+        if(bin===ytDlp)throw Object.assign(Error('process failed'),{diagnostic:'No video formats found'});
+        return run(bin,args,opts);
+    }}),{code:'unavailable'});
     console.log('Social media routing, mixed carousel, silent MP4, partial errors and cleanup verified');
 });
