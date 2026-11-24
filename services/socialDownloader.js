@@ -35,7 +35,12 @@ async function expand(platform,input,end,fetcher){
         const loc=res.headers.get('location');await res.body?.cancel();
         if(![301,302,303,307,308].includes(res.status)||!loc)throw new DownloadError(res.status===401||res.status===403?'restricted':res.status===429?'remote_limit':'unavailable','No se pudo resolver el enlace compartido.');
         const next=new URL(loc,url);
-        socialUrl(platform,next.href);
+        try{socialUrl(platform,next.href);}catch{
+            // Do not follow an unrecognized or foreign destination, including a login page.
+            const known=next.protocol==='https:'&&(platform==='tiktok'?['www.tiktok.com','m.tiktok.com','tiktok.com','vm.tiktok.com','vt.tiktok.com'].includes(next.hostname):platform==='pinterest'?next.hostname==='pin.it'||next.hostname.endsWith('.pinterest.com')||next.hostname==='pinterest.com':['www.instagram.com','instagram.com'].includes(next.hostname));
+            console.info('Enlace compartido destino no reconocido '+JSON.stringify({platform,samePlatform:known,pathKind:next.pathname.includes('/photo/')?'photo':next.pathname.includes('/pin/')?'pin':next.pathname.includes('/login')?'login':'other'}));
+            throw new DownloadError(next.pathname.includes('/login')?'restricted':'unavailable','No se pudo resolver el enlace compartido. Prueba con el enlace completo de la publicación.');
+        }
         url=next.href;
     }
     throw notAvailable();
@@ -49,14 +54,29 @@ function validPinMedia(url,kind){
         return {kind,url:safe};
     }catch{return undefined;}
 }
-export function pinterestItems(html,pinId){
+// A video pin may store its renditions in a story block rather than videos.
+export function pinDataItems(pin){
+    if(!pin||typeof pin!=='object')return {items:[],video:false,confirmedImage:false};
+    const lists=[pin.videos?.video_list];
+    const blocks=(Array.isArray(pin.story_pin_data?.pages)?pin.story_pin_data.pages:[]).flatMap(page=>Array.isArray(page?.blocks)?page.blocks:[]);
+    for(const block of blocks)lists.push(block?.video?.video_list);
+    const variants=lists.flatMap(list=>Object.values(list||{})).filter(v=>v&&typeof v==='object').sort((a,b)=>(b.width||0)*(b.height||0)-(a.width||0)*(a.height||0));
+    const direct=variants.map(v=>validPinMedia(v.url,'video')).find(Boolean);
+    const video=Boolean(direct||Object.keys(pin.videos||{}).length||blocks.some(b=>b?.video)||pin.is_video===true||pin.is_video_pin===true||pin.embed?.src||/video/i.test(String(pin.media_type||pin.pin_type||'')));
+    if(video)return {items:direct?[direct]:[],video:true,confirmedImage:false};
+    if(pin.story_pin_data)return {items:[],video:false,confirmedImage:false}; // unsupported multi-block story, never its cover
+    for(const key of ['orig','original','origin','736x','564x']){
+        const item=validPinMedia(pin.images?.[key]?.url,'image');
+        if(item)return {items:[item],video:false,confirmedImage:true};
+    }
+    return {items:[],video:false,confirmedImage:false};
+}
+export function pinterestPage(html,pinId){
     const $=load(html);
-    // Only inspect objects belonging to this pin; related pins are not candidates.
     let pin;
     if(pinId)for(const el of $('script#__PWS_DATA__,script#__PWS_INITIAL_PROPS__,script[type="application/json"]').toArray()){
         try{
-            const root=JSON.parse($(el).text()),stack=[root];
-            let scanned=0;
+            const root=JSON.parse($(el).text()),stack=[root];let scanned=0;
             while(stack.length&&scanned++<50000){
                 const obj=stack.pop();
                 if(!obj||typeof obj!=='object')continue;
@@ -66,35 +86,57 @@ export function pinterestItems(html,pinId){
         }catch{}
         if(pin)break;
     }
-    const videos=pin?.videos?.video_list;
-    const variants=Object.values(videos||{}).filter(v=>v&&typeof v==='object').sort((a,b)=>(b.width||0)*(b.height||0)-(a.width||0)*(a.height||0));
-    const directVideo=variants.map(v=>validPinMedia(v.url,'video')).find(Boolean);
-    if(directVideo)return [directVideo];
+    const structured=pinDataItems(pin);
+    if(structured.video)return structured;
     const video=$('meta[property="og:video:secure_url"]').attr('content')||$('meta[property="og:video"]').attr('content');
-    if(video||videos||pin?.story_pin_data||$('meta[property="og:type"]').attr('content')?.startsWith('video')){
+    if(video||$('meta[property="og:type"]').attr('content')?.startsWith('video')){
         const item=validPinMedia(video,'video');
-        return item?[item]:[]; // let yt-dlp resolve video, not the poster image
+        return {items:item?[item]:[],video:true,confirmedImage:false};
     }
-    for(const key of ['orig','original','origin','736x','564x']){
-        const item=validPinMedia(pin?.images?.[key]?.url,'image');
-        if(item)return [item];
-    }
+    if(structured.confirmedImage)return structured;
+    if(pin?.story_pin_data)return structured;
     const image=$('meta[property="og:image:secure_url"]').attr('content')||$('meta[property="og:image"]').attr('content');
     const item=validPinMedia(image,'image');
-    return item?[item]:[];
+    return {items:item?[item]:[],video:false,confirmedImage:Boolean(item&&/^(?:image|photo)$/i.test($('meta[property="og:type"]').attr('content')||''))};
 }
+export function pinterestItems(html,pinId){return pinterestPage(html,pinId).items;}
 async function pinterestMedia(input,end,fetcher){
+    // Same anonymous, single-pin resource used by yt-dlp. Exact ID, no cookies.
+    const api='https://www.pinterest.com/resource/PinResource/get/?data='+encodeURIComponent(JSON.stringify({options:{field_set_key:'unauth_react_main_pin',id:input.id}}));
+    try{
+        const {res}=await safeResponse(api,v=>{
+            const u=new URL(trustedUrl(v,['www.pinterest.com']));
+            if(u.hostname!=='www.pinterest.com'||u.pathname!=='/resource/PinResource/get/')throw notAvailable();
+            return u.href;
+        },{fetcher,signal:AbortSignal.timeout(remaining(end,12000)),headers:{Accept:'application/json','X-Pinterest-PWS-Handler':'www/[username].js'}});
+        const pin=JSON.parse(await readBounded(res,4*1024*1024))?.resource_response?.data;
+        if(String(pin?.id)===input.id){
+            const result=pinDataItems(pin);
+            if(result.video||result.confirmedImage){console.info('Pinterest tipo '+JSON.stringify({source:'resource',video:result.video,confirmedImage:result.confirmedImage}));return result;}
+        }
+    }catch(e){if(!canTryAlternative(e))throw e;}
     const {res}=await safeResponse(input.url,v=>socialUrl('pinterest',v).url,{fetcher,signal:AbortSignal.timeout(remaining(end,15000)),headers:{Accept:'text/html'}});
-    return pinterestItems(await readBounded(res,4*1024*1024),input.id);
+    const result=pinterestPage(await readBounded(res,4*1024*1024),input.id);
+    console.info('Pinterest tipo '+JSON.stringify({source:'page',video:result.video,confirmedImage:result.confirmedImage}));
+    return result;
 }
 function canTryAlternative(error){return ['unavailable','timeout','failed'].includes(publicError(error).code);}
 // Public, structured page data only. Never infer a carousel from its poster.
 export function instagramPublicItems(html,shortcode){
     const $=load(html);
     let post;
-    for(const el of $('script[type="application/json"]').toArray()){
+    for(const el of $('script').toArray()){
         try{
-            const stack=[JSON.parse($(el).text())];let scanned=0;
+            const raw=$(el).text().trim();
+            let json;
+            if($(el).attr('type')==='application/json')json=JSON.parse(raw);
+            else{
+                // Parse a literal JSON argument; never execute page JavaScript.
+                const m=/^window\.__additionalDataLoaded\(\s*(?:"[^"]*"|'[^']*')\s*,\s*(\{[\s\S]*\})\s*\)\s*;?$/.exec(raw);
+                if(!m)continue;
+                json=JSON.parse(m[1]);
+            }
+            const stack=[json];let scanned=0;
             while(stack.length&&scanned++<50000){
                 const obj=stack.pop();
                 if(!obj||typeof obj!=='object')continue;
@@ -130,7 +172,16 @@ async function publicInstagram(input,end,fetcher){
     const shortcode=new URL(input.url).pathname.split('/')[2];
     return instagramPublicItems(html,shortcode);
 }
-async function instagramMedia(input,end,fetcher){
+async function instagramEmbed(input,end,fetcher){
+    const url=input.url+'embed/';
+    const {res}=await safeResponse(url,v=>{
+        const u=new URL(v);
+        if(u.origin!=='https://www.instagram.com'||u.username||u.password||u.pathname!==new URL(url).pathname)throw new DownloadError(u.pathname.includes('/login')?'restricted':'unavailable','La publicación no está disponible para incrustación pública.');
+        return u.href;
+    },{fetcher,signal:AbortSignal.timeout(remaining(end,10000)),headers:{Accept:'text/html'}});
+    return instagramPublicItems(await readBounded(res,4*1024*1024),new URL(input.url).pathname.split('/')[2]);
+}
+async function instagramMedia(input,end,fetcher,{post=false}={}){
     let last=notAvailable();
     for(const endpoint of ['instagram','instagram2']){
         try{
@@ -145,6 +196,15 @@ async function instagramMedia(input,end,fetcher){
             if(!canTryAlternative(e))throw e;
         }
     }
+    if(post){
+        try{
+            const items=await instagramEmbed(input,end,fetcher);
+            if(items.length){console.info('Instagram proveedor '+JSON.stringify({endpoint:'public_embed',items:items.length}));return items;}
+        }catch(e){
+            console.info('Instagram proveedor fallido '+JSON.stringify({endpoint:'public_embed',reason:publicError(e).code}));
+            if(!canTryAlternative(e))throw e;
+        }
+    }
     try{
         const items=await publicInstagram(input,end,fetcher);
         if(items.length){console.info('Instagram proveedor '+JSON.stringify({endpoint:'public_metadata',items:items.length}));return items;}
@@ -152,6 +212,7 @@ async function instagramMedia(input,end,fetcher){
         console.info('Instagram proveedor fallido '+JSON.stringify({endpoint:'public_metadata',reason:publicError(e).code}));
         if(!canTryAlternative(e))throw e;
     }
+    if(post)throw new DownloadError('unavailable','Instagram no devolvió los archivos de la publicación. El proveedor puede estar temporalmente caído.');
     throw last;
 }
 async function photoTikTok(input,dir,end,runner){
@@ -232,13 +293,15 @@ export async function withSocialDownload(platform,query,{kind='video',position}=
             if(platform==='instagram'&&kind==='video'&&input.photo)throw new DownloadError('input','Utiliza #post para publicaciones de Instagram.');
             let items;
             if(platform==='instagram'&&kind==='post'){
-                items=await instagramMedia(input,end,fetcher);
+                items=await instagramMedia(input,end,fetcher,{post:true});
             }else if(platform==='twitter'){
                 items=twitterItems(await jsonAt('https://api.fxtwitter.com/status/'+input.id,'api.fxtwitter.com',end,fetcher));
             }else if(platform==='pinterest'){
-                try{items=await pinterestMedia(input,end,fetcher);}
-                catch(e){if(!canTryAlternative(e))throw e;items=[];}
-                if(!items.length)items=undefined; // yt-dlp resolves video without a direct MP4
+                let pin;
+                try{pin=await pinterestMedia(input,end,fetcher);}
+                catch(e){if(!canTryAlternative(e))throw e;}
+                if(pin?.video&&pin.items.length||pin?.confirmedImage)items=pin.items;
+                // Ambiguous OpenGraph image is not enough: try the video extractor first.
             }else if(platform==='tiktok'&&input.photo){
                 const data=await photoTikTok(initial.short?initial:input,dir,end,runner);
                 items=kind==='audio'?(data.music?[{kind:'audio',url:data.music}]:[]):data.items;
@@ -265,7 +328,13 @@ export async function withSocialDownload(platform,query,{kind='video',position}=
                 total=chosen.length;
                 let bytes=0;
                 // Validate all destinations before sending any item.
-                const checked=chosen.map(item=>({...item,url:mediaUrl(platform,item.url)}));
+                const checked=chosen.map(item=>{
+                    try{return {...item,url:mediaUrl(platform,item.url)};}
+                    catch{
+                        console.info('Red social CDN no reconocido '+JSON.stringify({platform,kind:item.kind}));
+                        throw new DownloadError('unavailable','El proveedor devolvió un archivo desde un servidor no compatible.');
+                    }
+                });
                 for(const [index,item] of checked.entries()){
                     const source=join(dir,'source-'+index);
                     const left=limit-bytes;
