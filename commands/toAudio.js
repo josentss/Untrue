@@ -1,91 +1,23 @@
-import { ffmpeg as ffmpegPath } from '../core/config.js';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { unlinkSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { exec } from 'node:child_process';
-import { promisify } from 'util';
-import { downloadContentFromMessage } from 'baileys';
+import { withTemp } from '../core/process.js';
+import { maxInputBytes } from '../core/config.js';
+import { selectMedia,MediaError,soundUnavailable } from '../core/mediaTarget.js';
+import { downloadToFile } from '../services/mediaDownload.js';
+import { extractAudio } from '../services/stickerEngine.js';
 
-const execPromise = promisify(exec);
-
-function getFfmpegPath() {
-    return ffmpegPath;
-}
-
-export async function toAudioCommand(sock, m) {
-    let tempVideoPath, tempAudioPath;
-
-    try {
-        const quoted = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-
-        if (!quoted) {
-            await sock.sendMessage(m.key.remoteJid, {
-                text: 'Responde a un video con #toa'
-            }, { quoted: m });
-            return;
-        }
-
-        if (!quoted.videoMessage && !quoted.documentMessage) {
-            await sock.sendMessage(m.key.remoteJid, {
-                text: 'El mensaje no contiene un video válido.'
-            }, { quoted: m });
-            return;
-        }
-
-        await sock.sendMessage(m.key.remoteJid, {
-            text: 'Extrayendo audio...'
-        }, { quoted: m });
-
-        let messageContent, downloadType;
-
-        if (quoted.videoMessage) {
-            downloadType = 'video';
-            messageContent = quoted.videoMessage;
-        } else {
-            downloadType = 'document';
-            messageContent = quoted.documentMessage;
-        }
-
-        const stream = await downloadContentFromMessage(messageContent, downloadType);
-        const chunks = [];
-        for await (const chunk of stream) chunks.push(chunk);
-        const videoBuffer = Buffer.concat(chunks);
-
-        if (!videoBuffer.length) throw new Error('No se pudo descargar el video');
-
-        tempVideoPath = join(tmpdir(), `video-${Date.now()}.mp4`);
-        tempAudioPath = join(tmpdir(), `audio-${Date.now()}.mp3`);
-        writeFileSync(tempVideoPath, videoBuffer);
-
-        const ffmpeg = getFfmpegPath();
-        const cmd = `"${ffmpeg}" -i "${tempVideoPath}" -vn -acodec libmp3lame -ab 128k -ar 44100 -y "${tempAudioPath}"`;
-
-        try {
-            await execPromise(cmd);
-        } catch {
-            const alt = `"${ffmpeg}" -i "${tempVideoPath}" -q:a 0 -map a "${tempAudioPath}"`;
-            await execPromise(alt);
-        }
-
-        if (!existsSync(tempAudioPath)) throw new Error('No se generó el audio');
-
-        const audioBuffer = readFileSync(tempAudioPath);
-
-        await sock.sendMessage(m.key.remoteJid, {
-            audio: audioBuffer,
-            mimetype: 'audio/mpeg',
-            ptt: false
-        }, { quoted: m });
-
-    } catch (error) {
-        console.error('Error in toAudio:', error.message);
-        await sock.sendMessage(m.key.remoteJid, {
-            text: `Error: ${error.message}`
-        }, { quoted: m });
-    } finally {
-        try {
-            if (tempVideoPath && existsSync(tempVideoPath)) unlinkSync(tempVideoPath);
-            if (tempAudioPath && existsSync(tempAudioPath)) unlinkSync(tempAudioPath);
-        } catch {}
+export async function toAudioCommand(sock,m){
+    try{
+        const target=selectMedia(m);
+        if(target.kind==='sticker') throw soundUnavailable();
+        if(!['video','audio'].includes(target.kind)) throw new MediaError('Responde a un video o audio con #toa.');
+        await withTemp(async dir=>{
+            const input=join(dir,'source');
+            await downloadToFile(target,input,{limit:maxInputBytes});
+            const output=await extractAudio(input,dir);
+            await sock.sendMessage(m.key.remoteJid,{audio:{url:output},mimetype:'audio/mpeg',ptt:false},{quoted:m});
+        });
+    }catch(e){
+        console.warn('Audio no procesado:',e instanceof MediaError?'validación':'conversión');
+        await sock.sendMessage(m.key.remoteJid,{text:e instanceof MediaError?e.message:'No se pudo extraer el audio.'},{quoted:m});
     }
 }
