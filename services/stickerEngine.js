@@ -132,7 +132,7 @@ export async function createSticker(input,dir,{kind,crop=true}={}) {
             if(attempted.has(key)) continue;
             attempted.add(key);
             let timeout;
-            try { timeout=remaining(end); }
+            try { timeout=clean?Math.min(8000,remaining(end)):remaining(end); }
             catch { lastFailure='timeout'; break; }
             try {
                 await run(ffmpeg,[...baseArgs,...inputArgs,'-i',input,'-map','0:'+video.index,'-t',String(duration),'-an','-vf',videoFilter(size,fps,crop,alpha,clean),'-c:v','libwebp_anim','-quality',String(quality),'-compression_level','3','-loop','0','-threads','2',encoded],{timeout});
