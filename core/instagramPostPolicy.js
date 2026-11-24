@@ -35,6 +35,7 @@ export function postError(error){
     const marker=/UNTRUE_INSTAGRAM_HTTP_429(?:\s+retry_after_ms=(\d+))?/.exec(diagnostic);
     if(marker)return rateError(Number(marker[1])||0,'gallery-dl');
     if(/(?:HTTP(?: Error)?\s*[:(]?\s*429\b|429\s+Too Many Requests|too many requests|rate.limit)/i.test(diagnostic))return rateError(0,'gallery-dl');
+    if(/UNTRUE_RATE_LIMIT/.test(diagnostic))return rateError(0,'gallery-dl');
     if(/UNTRUE_ACCESS_RESTRICTED|UNTRUE_INSTAGRAM_HTTP_(?:401|403)|HTTP(?: Error)?\s*[:(]?\s*(?:401|403)\b|authentication|authorization|login required|log in|private|captcha|cookies (?:are )?required/i.test(diagnostic))return new DownloadError('restricted','Instagram restringe el acceso a esta publicación.');
     return publicError(error);
 }

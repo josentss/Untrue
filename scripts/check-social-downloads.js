@@ -198,6 +198,8 @@ await withTemp(async dir=>{
         runner:async(bin,args,opts)=>{assert.notEqual(bin,galleryPython);return run(bin,args,opts);},
         fetcher:async url=>{callsPost++;return url.includes('/embed/')?new Response(embedHtml):fetcher(url);}});
     assert.equal(callsPost,2);
+    // Empty embed must not prevent the selected carousel position from using gallery-dl.
+    await download('instagram','https://instagram.com/p/ABC/',{kind:'post',position:2},async item=>assert.equal(item.kind,'video'),{runner:galleryRunner,fetcher:async()=>new Response('<html></html>')});
     let now=0,limitedCalls=0;const gate=createPostGate({now:()=>now});
     const rateDeps={instagramGate:gate,fetcher:async()=>{limitedCalls++;return new Response(null,{status:429,headers:{'Retry-After':'1800'}});},runner:async()=>assert.fail('no fallback')};
     await assert.rejects(download('instagram','https://instagram.com/p/ABC/',{kind:'post'},async()=>assert.fail('no send'),rateDeps),{code:'remote_limit'});

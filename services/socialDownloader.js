@@ -156,7 +156,10 @@ export function instagramPublicItems(html,shortcode){
     const sidecar=post.edge_sidecar_to_children?.edges;
     const carousel=post.__typename==='GraphSidecar'||post.media_type===8||Array.isArray(sidecar)||Array.isArray(post.carousel_media);
     const nodes=carousel?(Array.isArray(sidecar)?sidecar.map(e=>e?.node):post.carousel_media):[post];
-    if(!Array.isArray(nodes)||!nodes.length||nodes.length>MAX_ITEMS)return [];
+    if(!Array.isArray(nodes)||!nodes.length)return [];
+    if(nodes.length>MAX_ITEMS)throw new DownloadError('size','La publicación supera los 20 archivos.');
+    const declared=post.edge_sidecar_to_children?.count??post.carousel_media_count;
+    if(carousel&&Number.isSafeInteger(declared)&&declared!==nodes.length)return [];
     const result=[];
     for(const node of nodes){
         if(!node||node.is_private===true||node.owner?.is_private===true||node.user?.is_private===true)return [];
@@ -295,6 +298,7 @@ async function prepareInstagram(input,dir,end,position,{runner,fetcher,limit,gat
     gate.check();
     const guarded=postFetcher(fetcher);
     const fromUrls=async items=>{
+        if(!Array.isArray(items)||!items.length)throw notAvailable();
         const chosen=selectItems(items,position,MAX_ITEMS);
         const valid=chosen.map(i=>({...i,url:mediaUrl('instagram',i.url)}));
         const result=[];let bytes=0;
