@@ -41,3 +41,13 @@ test('every redirect validated and byte limit removes incomplete file',async()=>
         assert.deepEqual(await readFile(p),Buffer.from([1,2,3]));
     });
 });
+
+test('regression: empty TikTok handle and localized Pinterest links',()=>{
+    assert.equal(socialUrl('tiktok','https://vt.tiktok.com/ZSs2dmLnJ').short,true);
+    assert.equal(socialUrl('tiktok','https://www.tiktok.com/@/photo/123?_r=1').photo,true);
+    assert.equal(socialUrl('tiktok','https://www.tiktok.com/share/photo/123').url,'https://www.tiktok.com/@/photo/123');
+    assert.equal(socialUrl('pinterest','https://es.pinterest.com/pin/637400153560476445/').id,'637400153560476445');
+    assert.equal(socialUrl('pinterest','https://pin.it/2s74Wk6q9 ').short,true);
+    assert.throws(()=>socialUrl('pinterest','https://es.pinterest.com.evil.test/pin/123/'));
+    assert.throws(()=>socialUrl('tiktok','https://www.tiktok.com/redirect?url=https://evil.test'));
+});

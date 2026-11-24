@@ -6,8 +6,14 @@ function first(value){
     return value&&typeof value==='object'?first(value.url||value.src||value.playUrl):undefined;
 }
 try{
-    const result=await Tiktok.Downloader(url,{version:'v3'});
-    const r=result?.result||{};
+    let r={};
+    for(const version of ['v3','v1','v2']){
+        try{
+            const result=await Tiktok.Downloader(url,{version});
+            const candidate=result?.result||{};
+            if(Array.isArray(candidate.images||candidate.image)&&(candidate.images||candidate.image).length){r=candidate;break;}
+        }catch{}
+    }
     const images=r.images||r.image||[];
     const items=Array.isArray(images)?images.map(first).filter(Boolean).map(url=>({kind:'image',url})):[];
     const music=first(r.music?.playUrl||r.music||r.music_url||r.sound);
