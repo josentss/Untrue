@@ -22,24 +22,88 @@ async function jsonAt(url,domain,end,fetcher){
     const {res}=await safeResponse(url,v=>trustedUrl(v,[domain]),{fetcher,signal:AbortSignal.timeout(remaining(end,15000))});
     return JSON.parse(await readBounded(res,metadataLimit));
 }
+// Stop on the canonical post before fetching it. Validate every redirect,
+// including the hostname and path, without rewriting the next request.
 async function expand(platform,input,end,fetcher){
     if(!input.short||!['tiktok','pinterest','instagram'].includes(platform))return input;
-    const {res,url}=await safeResponse(input.url,v=>socialUrl(platform,v).url,{fetcher,signal:AbortSignal.timeout(remaining(end,12000))});
-    await res.body?.cancel();
-    const target=socialUrl(platform,url);
-    if(target.short)throw notAvailable();
-    return target;
+    let url=input.url;
+    const signal=AbortSignal.timeout(remaining(end,12000));
+    for(let i=0;i<5;i++){
+        const target=socialUrl(platform,url);
+        if(!target.short)return target;
+        const res=await fetcher(url,{signal,redirect:'manual',headers:{'User-Agent':'UntrueBot/2.0','Accept':'text/html'}});
+        const loc=res.headers.get('location');await res.body?.cancel();
+        if(![301,302,303,307,308].includes(res.status)||!loc)throw new DownloadError(res.status===401||res.status===403?'restricted':res.status===429?'remote_limit':'unavailable','No se pudo resolver el enlace compartido.');
+        const next=new URL(loc,url);
+        socialUrl(platform,next.href);
+        url=next.href;
+    }
+    throw notAvailable();
 }
-export function pinterestItems(html){
+function validPinMedia(url,kind){
+    try{
+        const safe=mediaUrl('pinterest',url);
+        const path=new URL(safe).pathname;
+        if(kind==='video'&&!/\.mp4$/i.test(path))return undefined;
+        if(kind==='image'&&!/\.(?:jpe?g|png|webp|avif)$/i.test(path))return undefined;
+        return {kind,url:safe};
+    }catch{return undefined;}
+}
+export function pinterestItems(html,pinId){
     const $=load(html);
+    // Only inspect objects belonging to this pin; related pins are not candidates.
+    let pin;
+    if(pinId)for(const el of $('script#__PWS_DATA__,script#__PWS_INITIAL_PROPS__,script[type="application/json"]').toArray()){
+        try{
+            const root=JSON.parse($(el).text()),stack=[root];
+            let scanned=0;
+            while(stack.length&&scanned++<50000){
+                const obj=stack.pop();
+                if(!obj||typeof obj!=='object')continue;
+                if(String(obj.id)===String(pinId)&&(obj.images||obj.videos||obj.story_pin_data)){pin=obj;break;}
+                for(const value of Object.values(obj))if(value&&typeof value==='object')stack.push(value);
+            }
+        }catch{}
+        if(pin)break;
+    }
+    const videos=pin?.videos?.video_list;
+    const variants=Object.values(videos||{}).filter(v=>v&&typeof v==='object').sort((a,b)=>(b.width||0)*(b.height||0)-(a.width||0)*(a.height||0));
+    const directVideo=variants.map(v=>validPinMedia(v.url,'video')).find(Boolean);
+    if(directVideo)return [directVideo];
     const video=$('meta[property="og:video:secure_url"]').attr('content')||$('meta[property="og:video"]').attr('content');
+    if(video||videos||pin?.story_pin_data||$('meta[property="og:type"]').attr('content')?.startsWith('video')){
+        const item=validPinMedia(video,'video');
+        return item?[item]:[]; // let yt-dlp resolve video, not the poster image
+    }
+    for(const key of ['orig','original','origin','736x','564x']){
+        const item=validPinMedia(pin?.images?.[key]?.url,'image');
+        if(item)return [item];
+    }
     const image=$('meta[property="og:image:secure_url"]').attr('content')||$('meta[property="og:image"]').attr('content');
-    if(video)return [{kind:'video',url:video}];
-    return image?[{kind:'image',url:image}]:[];
+    const item=validPinMedia(image,'image');
+    return item?[item]:[];
 }
 async function pinterestMedia(input,end,fetcher){
-    const {res}=await safeResponse(input.url,v=>socialUrl('pinterest',v).url,{fetcher,signal:AbortSignal.timeout(remaining(end,15000))});
-    return pinterestItems(await readBounded(res,4*1024*1024));
+    const {res}=await safeResponse(input.url,v=>socialUrl('pinterest',v).url,{fetcher,signal:AbortSignal.timeout(remaining(end,15000)),headers:{Accept:'text/html'}});
+    return pinterestItems(await readBounded(res,4*1024*1024),input.id);
+}
+function canTryAlternative(error){return ['unavailable','timeout','failed'].includes(publicError(error).code);}
+async function instagramMedia(input,end,fetcher){
+    let last=notAvailable();
+    for(const endpoint of ['instagram','instagram2']){
+        try{
+            const items=instagramItems(await jsonAt('https://api.bk9.dev/download/'+endpoint+'?url='+encodeURIComponent(input.url),'api.bk9.dev',end,fetcher));
+            if(!items.length)throw notAvailable();
+            for(const item of items)mediaUrl('instagram',item.url);
+            console.info('Instagram proveedor '+JSON.stringify({endpoint,items:items.length}));
+            return items;
+        }catch(e){
+            last=e;
+            console.info('Instagram proveedor fallido '+JSON.stringify({endpoint,reason:publicError(e).code}));
+            if(!canTryAlternative(e))throw e;
+        }
+    }
+    throw last;
 }
 async function photoTikTok(input,dir,end,runner){
     const script=fileURLToPath(new URL('../scripts/tiktok-public-photos.js',import.meta.url));
@@ -50,7 +114,7 @@ function sizeLimit(limit){return '[filesize<=?'+limit+'][filesize_approx<=?'+lim
 export function socialVideoArgs(input,dir,kind,limit){
     const b=sizeLimit(limit),fit='[width<=?1280][height<=?1280]';
     const selector='bv[ext=mp4][vcodec^=avc1]'+fit+b+'+ba[ext=m4a]'+b+'/b[ext=mp4][vcodec^=avc1]'+fit+b+'/bv'+fit+b+'+ba'+b+'/b'+fit+b;
-    const args=[...commonArgs(),'--no-simulate','--max-filesize',String(limit),'--match-filter','!is_live & !is_upcoming & duration <= 1800 & availability !=? private & availability !=? premium_only & availability !=? subscriber_only & availability !=? needs_auth','--print','after_move:filepath','-o',join(dir,'download.%(ext)s')];
+    const args=[...commonArgs(),'--no-simulate','--max-filesize',String(limit),'--match-filter','!is_live & !is_upcoming & duration <=? 1800 & availability !=? private & availability !=? premium_only & availability !=? subscriber_only & availability !=? needs_auth','--print','after_move:filepath','-o',join(dir,'download.%(ext)s')];
     if(ffmpeg!=='ffmpeg')args.push('--ffmpeg-location',ffmpeg);
     if(kind==='audio')args.push('-f','ba/b','-x','--audio-format','mp3','--audio-quality','192K');
     else args.push('-f',selector,'--merge-output-format','mp4');
@@ -112,28 +176,42 @@ export async function withSocialDownload(platform,query,{kind='video',position}=
     const initial=socialUrl(platform,query);
     return withTemp(async dir=>{
         const end=Date.now()+deadlineMs,start=Date.now();
-        let sent=0,total=0;
+        let sent=0,total=0,stage='resolve';
         try{
             const input=await expand(platform,initial,end,fetcher);
+            stage='provider';
             if(platform==='instagram'&&kind==='video'&&input.photo)throw new DownloadError('input','Utiliza #post para publicaciones de Instagram.');
             let items;
             if(platform==='instagram'&&kind==='post'){
-                items=instagramItems(await jsonAt('https://api.bk9.dev/download/instagram?url='+encodeURIComponent(input.url),'api.bk9.dev',end,fetcher));
+                items=await instagramMedia(input,end,fetcher);
             }else if(platform==='twitter'){
                 items=twitterItems(await jsonAt('https://api.fxtwitter.com/status/'+input.id,'api.fxtwitter.com',end,fetcher));
             }else if(platform==='pinterest'){
-                items=await pinterestMedia(input,end,fetcher);
-                if(!items.length||items[0]?.kind==='video')items=undefined; // use supported extractor for video
+                try{items=await pinterestMedia(input,end,fetcher);}
+                catch(e){if(!canTryAlternative(e))throw e;items=[];}
+                if(!items.length)items=undefined; // yt-dlp resolves video without a direct MP4
             }else if(platform==='tiktok'&&input.photo){
                 const data=await photoTikTok(input,dir,end,runner);
                 items=kind==='audio'?(data.music?[{kind:'audio',url:data.music}]:[]):data.items;
             }
             if(items===undefined){
-                const result=await localVideo(input,kind==='audio'?'audio':'video',dir,limit,runner,end);
-                total=1;
-                try{await consume(result,0,1);}catch{throw new DownloadError('send','No se pudo enviar el archivo a WhatsApp.');}
-                sent=1;
-            }else{
+                let result;
+                try{result=await localVideo(input,kind==='audio'?'audio':'video',dir,limit,runner,end);}
+                catch(e){
+                    if(platform!=='instagram'||kind!=='video'||!canTryAlternative(e))throw e;
+                    console.info('Instagram video proveedor local fallido '+JSON.stringify({reason:publicError(e).code}));
+                    const alternative=await instagramMedia(input,end,fetcher);
+                    if(alternative.length!==1||alternative[0].kind!=='video')throw notAvailable();
+                    items=alternative;
+                }
+                if(result){
+                    total=1;
+                    try{await consume(result,0,1);}catch{throw new DownloadError('send','No se pudo enviar el archivo a WhatsApp.');}
+                    sent=1;
+                }
+            }
+            if(items!==undefined){
+                stage='media';
                 const chosen=selectItems(items,position,MAX_ITEMS);
                 total=chosen.length;
                 let bytes=0;
@@ -154,6 +232,7 @@ export async function withSocialDownload(platform,query,{kind='video',position}=
             return {sent,total};
         }catch(error){
             const e=publicError(error);
+            console.info('Red social etapa fallida '+JSON.stringify({platform,kind,stage,reason:e.code}));
             if(sent)throw new DownloadError(e.code,'Se enviaron '+sent+' de '+total+' archivos. '+e.message);
             throw e;
         }

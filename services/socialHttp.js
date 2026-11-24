@@ -4,10 +4,10 @@ import { pipeline } from 'node:stream/promises';
 import { unlink } from 'node:fs/promises';
 import { DownloadError } from '../core/downloadPolicy.js';
 
-export async function safeResponse(url,validate,{fetcher=fetch,signal=AbortSignal.timeout(15000)}={}){
+export async function safeResponse(url,validate,{fetcher=fetch,signal=AbortSignal.timeout(15000),headers={}}={}){
     for(let i=0;i<5;i++){
         url=validate(url);
-        const res=await fetcher(url,{signal,redirect:'manual',headers:{'User-Agent':'UntrueBot/2.0','Accept':'*/*'}});
+        const res=await fetcher(url,{signal,redirect:'manual',headers:{'User-Agent':'UntrueBot/2.0','Accept':'*/*',...headers}});
         if([301,302,303,307,308].includes(res.status)){
             const loc=res.headers.get('location');await res.body?.cancel();
             if(!loc)throw new DownloadError('unavailable','Redirección inválida.');

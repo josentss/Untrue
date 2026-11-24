@@ -5,17 +5,22 @@ const hosts={
     instagram:['instagram.com','www.instagram.com','m.instagram.com'],
     facebook:['facebook.com','www.facebook.com','m.facebook.com','web.facebook.com','fb.watch','fb.me','www.fb.me'],
     twitter:['x.com','www.x.com','twitter.com','www.twitter.com','mobile.twitter.com','mobile.x.com'],
-    pinterest:['pinterest.com','www.pinterest.com','pin.it','pinterest.es','www.pinterest.es','pinterest.co.uk','www.pinterest.co.uk','pinterest.ca','www.pinterest.ca','pinterest.de','www.pinterest.de','pinterest.fr','www.pinterest.fr','pinterest.com.mx','www.pinterest.com.mx']
+    pinterest:['pinterest.com','www.pinterest.com','pin.it','pinterest.es','www.pinterest.es','es.pinterest.com','uk.pinterest.com','fr.pinterest.com','de.pinterest.com','mx.pinterest.com','ca.pinterest.com','br.pinterest.com','pt.pinterest.com','it.pinterest.com','au.pinterest.com','pinterest.co.uk','www.pinterest.co.uk','pinterest.ca','www.pinterest.ca','pinterest.de','www.pinterest.de','pinterest.fr','www.pinterest.fr','pinterest.com.mx','www.pinterest.com.mx']
 };
 export function socialUrl(platform,value){
+    if(typeof value==='string')value=value.trim();
     if(typeof value!=='string'||value.length>2048||/[\x00-\x20\x7f]/.test(value))throw invalid();
     let u;try{u=new URL(/^https?:\/\//i.test(value)?value:'https://'+value);}catch{throw invalid();}
     if(u.protocol!=='https:'||u.username||u.password||u.port||!hosts[platform]?.includes(u.hostname))throw invalid();
     const p=u.pathname;
     if(platform==='tiktok'){
         const short=['vm.tiktok.com','vt.tiktok.com'].includes(u.hostname)?/^\/[A-Za-z0-9]+\/?$/.test(p):/^\/t\/[A-Za-z0-9]+\/?$/.test(p);
-        if(!short&&!/^\/@[\w.-]+\/(?:video|photo)\/\d+\/?$/.test(p))throw invalid();
-        return {url:u.origin+p,short,photo:p.includes('/photo/')};
+        const post=/^\/@(?:[\w.-]|%[0-9A-Fa-f]{2})*\/(video|photo)\/(\d+)\/?$/.exec(p);
+        const share=/^\/share\/(video|photo)\/(\d+)\/?$/.exec(p);
+        const legacy=/^\/v\/(\d+)\.html$/.exec(p);
+        if(!short&&!post&&!share&&!legacy)throw invalid();
+        const target=post||share;
+        return {url:share?'https://www.tiktok.com/@/'+share[1]+'/'+share[2]:legacy?'https://www.tiktok.com/@/video/'+legacy[1]:u.origin+p,short,photo:target?.[1]==='photo'};
     }
     if(platform==='instagram'){
         if(/^\/share\/(?:reel\/|p\/)?[A-Za-z0-9_-]+\/?$/.test(p))return {url:'https://www.instagram.com'+p,short:true};
