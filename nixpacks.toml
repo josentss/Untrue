@@ -1,6 +1,0 @@
-[phases.setup]
-nixPkgs = ["nodejs_20", "ffmpeg", "yt-dlp"]
-
-[variables]
-NODE_ENV = "production"
-NIXPACKS_NODE_VERSION = "20"

@@ -4,15 +4,15 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "prestart": "mkdir -p database",
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "verify": "node verify-setup.js",
-    "audit": "npm audit"
+    "verify": "node scripts/verify.js",
+    "audit": "npm audit",
+    "test": "node --test"
   },
   "engines": {
-    "node": ">=18.0.0",
-    "npm": ">=9.0.0"
+    "node": ">=22",
+    "npm": ">=10"
   },
   "dependencies": {
     "@bochilteam/scraper": "^5.0.1",
