@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import sharp from 'sharp';
 import {join} from 'node:path';
-import {readFile,copyFile,access} from 'node:fs/promises';
+import {readFile,copyFile,access,writeFile} from 'node:fs/promises';
 import {withTemp,run} from '../core/process.js';
-import {ffmpeg,ytDlp} from '../core/config.js';
-import {withSocialDownload,pinterestItems,pinDataItems,instagramPublicItems,normalizeSocialFile} from '../services/socialDownloader.js';
+import {ffmpeg,ytDlp,galleryPython} from '../core/config.js';
+import {withSocialDownload as download,pinterestItems,pinDataItems,instagramPublicItems,normalizeSocialFile} from '../services/socialDownloader.js';
+const withSocialDownload=(p,q,o,c,deps={})=>download(p,q,o,c,{...deps,gallery:false});
 await withTemp(async dir=>{
     const image=join(dir,'fixture.png'),video=join(dir,'fixture.mp4');
     await sharp({create:{width:120,height:100,channels:3,background:'red'}}).png().toFile(image);
@@ -146,5 +147,47 @@ await withTemp(async dir=>{
         if(bin===ytDlp)throw Object.assign(Error('process failed'),{diagnostic:'No video formats found'});
         return run(bin,args,opts);
     }}),{code:'unavailable'});
+    // Real installed gallery-dl CLI and manifest contract, without remote requests.
+    const {galleryArgs}=await import('../services/galleryDownloader.js');
+    const ga=galleryArgs('tiktok','https://www.tiktok.com/@test/photo/123',dir,'video');
+    const version=await run(galleryPython,[ga[0],'tiktok','--version']);
+    assert.match(version.stdout,/1\.32\.21/);
+    await run(galleryPython,[...ga.slice(0,-2),'--list-extractors','tiktok'],{timeout:15000});
+    const galleryRunner=async(bin,args,opts)=>{
+        if(bin!==galleryPython)return run(bin,args,opts);
+        assert.equal(args.at(-2),'--');assert.ok(args.includes('--ignore-config'));assert.ok(!('COBALT_API_KEY' in opts.env));
+        const folder=args[args.indexOf('--directory')+1];
+        const one=join(folder,'photo.png'),two=join(folder,'video.mp4');
+        await copyFile(image,one);
+        if(args[1]==='instagram'){await copyFile(video,two);await writeFile(join(folder,'manifest.txt'),one+'\n'+two+'\n');}
+        else await writeFile(join(folder,'manifest.txt'),one+'\n');
+        return {stdout:'',stderr:''};
+    };
+    const gKinds=[];
+    await download('instagram','https://instagram.com/p/ABC/',{kind:'post'},async item=>gKinds.push(item.kind),{runner:galleryRunner,fetcher:async()=>assert.fail('gallery success must not use BK9')});
+    assert.deepEqual(gKinds,['image','video']);
+    await download('tiktok','https://www.tiktok.com/@test/photo/123',{kind:'video'},async item=>assert.equal(item.kind,'image'),{runner:galleryRunner});
+    await download('pinterest','https://pin.it/abc',{kind:'post'},async item=>assert.equal(item.kind,'image'),{runner:galleryRunner,fetcher:async()=>{throw new DOMException('timed out','TimeoutError');}});
+    let fallbackCalls=0;
+    await download('instagram','https://instagram.com/p/ABC/',{kind:'post'},async()=>{},{
+        runner:async(bin,args,opts)=>{if(bin===galleryPython){fallbackCalls++;throw Error('gallery unavailable');}return run(bin,args,opts);},fetcher});
+    assert.equal(fallbackCalls,1);
+    await assert.rejects(download('instagram','https://instagram.com/p/ABC/',{kind:'post'},async()=>assert.fail('restricted'),{
+        runner:async()=>{throw Object.assign(Error('gallery failed'),{diagnostic:'login required'});},fetcher:async()=>assert.fail('no fallback on restricted')}),{code:'restricted'});
+    const originalPinVideo=async(bin,args,opts)=>{
+        if(bin!==galleryPython)return run(bin,args,opts);
+        const folder=args[args.indexOf('--directory')+1],path=join(folder,'video.mp4');
+        await copyFile(video,path);await writeFile(join(folder,'manifest.txt'),path+'\n');
+        return {stdout:'',stderr:''};
+    };
+    await download('pinterest','https://www.pinterest.com/pin/123/',{kind:'post'},async item=>{
+        assert.equal(item.kind,'video');assert.ok(item.seconds>=2);
+        const mp4=await readFile(item.path);assert.ok(mp4.indexOf('moov')<mp4.indexOf('mdat'));
+    },{runner:originalPinVideo,fetcher:async()=>assert.fail('gallery success must not use another provider')});
+    await assert.rejects(download('instagram','https://instagram.com/p/ABC/',{kind:'post'},async()=>assert.fail('rate limited'),{
+        runner:async()=>{throw Object.assign(Error('gallery failed'),{diagnostic:'UNTRUE_RATE_LIMIT'});},fetcher:async()=>assert.fail('no fallback on rate limit')}),{code:'remote_limit'});
+    let deliveries=0;
+    await assert.rejects(download('instagram','https://instagram.com/p/ABC/',{kind:'post'},async()=>{deliveries++;throw Error('send failed');},{runner:galleryRunner,fetcher:async()=>assert.fail('no fallback on send error')}),{code:'send'});
+    assert.equal(deliveries,1);
     console.log('Social media routing, mixed carousel, silent MP4, partial errors and cleanup verified');
 });
