@@ -10,6 +10,7 @@ export function binary(name, env) {
 export const ffmpeg = binary('ffmpeg', 'FFMPEG_PATH');
 export const ffprobe = binary('ffprobe', 'FFPROBE_PATH');
 export const ytDlp = binary('yt-dlp', 'YTDLP_PATH');
+export const galleryPython = process.env.GALLERY_PYTHON || 'python3';
 export function positiveInt(value, fallback, max) {
     const n = Number(value);
     return Number.isSafeInteger(n) && n > 0 && n <= max ? n : fallback;
