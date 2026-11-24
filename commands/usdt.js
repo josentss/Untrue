@@ -1,100 +1,17 @@
-import axios from 'axios';
-
-const CRIPTOYA_API_URL = 'https://criptoya.com/api/usdt/ves';
-
-const formatVES = (num, maxDecimals = 4) => {
-    const finalAmount = parseFloat(num).toLocaleString('es-VE', {
-        minimumFractionDigits: maxDecimals,
-        maximumFractionDigits: maxDecimals
-    }).replace(/\./g, 'TEMP').replace(/,/g, '.').replace(/TEMP/g, ',');
-
-    return `${finalAmount} Bs`;
-};
-
-const getVenezuelanDateTime = () => {
-    const optionsDate = { timeZone: 'America/Caracas', day: '2-digit', month: '2-digit', year: 'numeric' };
-    const optionsTime = { timeZone: 'America/Caracas', hour: '2-digit', minute: '2-digit', hour12: true };
-
-    const date = new Date();
-    const formattedDate = new Intl.DateTimeFormat('es-VE', optionsDate).format(date);
-    const formattedTime = new Intl.DateTimeFormat('es-VE', optionsTime).format(date);
-
-    return { date: formattedDate, time: formattedTime };
-};
-
-export async function getUSDTPrice() {
-    try {
-        const response = await axios.get(CRIPTOYA_API_URL, { timeout: 10000 });
-        const data = response.data;
-        let totalAsk = 0, totalBid = 0, count = 0;
-
-        for (const exchange in data) {
-            if (data[exchange].ask && data[exchange].bid) {
-                totalAsk += data[exchange].ask;
-                totalBid += data[exchange].bid;
-                count++;
-            }
-        }
-
-        if (count === 0) throw new Error('API no devolvió tasas P2P válidas.');
-
-        const avgAskPrice = totalAsk / count;
-        const avgBidPrice = totalBid / count;
-        const usdtAveragePrice = (avgAskPrice + avgBidPrice) / 2;
-
-        const { date } = getVenezuelanDateTime();
-
-        return {
-            avgPrice: usdtAveragePrice.toFixed(4) + " Bs",
-            date: date
-        };
-
-    } catch (error) {
-        console.error('Error obteniendo precio USDT para calc:', error.message);
-        const { date } = getVenezuelanDateTime();
-        return { avgPrice: "N/A Bs (Est.)", date: date };
-    }
+import {utilityJson} from '../services/utilityHttp.js';
+import {parseUsdt,rateDate} from '../core/utilityPolicy.js';
+let cached,pending;
+async function quote({fetcher=fetch,now=Date.now()}={}){
+    if(cached&&now-cached.at<60000)return cached.value;
+    if(pending)return pending;
+    pending=(async()=>{const value=parseUsdt(await utilityJson('https://criptoya.com/api/usdt/ves',{fetcher}),now);cached={at:now,value};return value;})();
+    try{return await pending;}finally{pending=undefined;}
 }
-
-export async function usdtCommand(sock, m, args) {
-    const jid = m.key.remoteJid;
-
-    try {
-        await sock.sendMessage(jid, { text: 'Consultando precios desde BinanceP2P...' }, { quoted: m });
-
-        const response = await axios.get(CRIPTOYA_API_URL, { timeout: 10000 });
-        const data = response.data;
-
-        let totalAsk = 0, totalBid = 0, count = 0;
-
-        for (const exchange in data) {
-            if (data[exchange].ask && data[exchange].bid) {
-                totalAsk += data[exchange].ask;
-                totalBid += data[exchange].bid;
-                count++;
-            }
-        }
-
-        if (count === 0) throw new Error('API no devolvió tasas P2P válidas.');
-
-        const avgAskPrice = totalAsk / count;
-        const avgBidPrice = totalBid / count;
-        const usdtAveragePrice = (avgAskPrice + avgBidPrice) / 2;
-
-        const { date, time } = getVenezuelanDateTime();
-
-        const message = `Promedio del USDT\n\n` +
-                        `Tasa promedio: ${formatVES(usdtAveragePrice, 4)}\n` +
-                        `Venta: ${formatVES(avgAskPrice, 4)}\n` +
-                        `Compra: ${formatVES(avgBidPrice, 4)}\n` +
-                        `Fecha: ${date} ${time}\n\n` +
-                        `Fuente: www.binance.com`;
-
-        await sock.sendMessage(jid, { text: message }, { quoted: m });
-
-    } catch (error) {
-        const errorMsg = `Error al consultar USDT. No se pudo obtener la tasa P2P.\nDetalle: ${error.message}`;
-        await sock.sendMessage(jid, { text: errorMsg }, { quoted: m });
-        console.error('Error fetching USDT:', error.message);
-    }
+const format=n=>n.toFixed(4)+' Bs';
+export async function getUSDTPrice(){try{const r=await quote();return {avgPrice:format(r.avg),date:rateDate(r.newest)};}catch{return {avgPrice:'N/D',date:'N/D'};}}
+export async function usdtCommand(sock,m){
+    let text;
+    try{const r=await quote();text='*Referencia USDT/VES*\n\nPromedio: '+format(r.avg)+'\nCompra de USDT (ask): '+format(r.ask)+'\nVenta de USDT (bid): '+format(r.bid)+'\nMercados: '+r.count+'\nRango de actualización: '+rateDate(r.oldest)+' – '+rateDate(r.newest)+'\nFuente: CriptoYa. Promedio simple; no es una oferta de compra o venta.';}
+    catch{text='No hay cotizaciones recientes de USDT disponibles.';}
+    await sock.sendMessage(m.key.remoteJid,{text},{quoted:m});
 }

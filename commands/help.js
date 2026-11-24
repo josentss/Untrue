@@ -20,17 +20,17 @@ export async function helpCommand(sock, m) {
 • #sc [link/búsqueda] — SoundCloud
 
 *Utilidades*
-• #bcv — Tasa BCV
+• #bcv — Referencias USD/EUR en Bs
 • #usdt — Precio USDT
 • #qr [texto] — Generar QR
-• #traducir [idioma] — Traducir texto
+• #traducir [destino] [origen opcional] — Traducir texto
 
 *Convertidores*
 • #s — Crear sticker cuadrado (máx. 15 s)
 • #sm — Sticker a imagen o video
 • #toa — Extraer audio de video/audio
-• #tot — Extraer texto
-• #toi — Documento a imagen
+• #tot — OCR local o transcripción de audio/video (10 min)
+• #toi [página] — PDF, Word o Excel a imagen (hasta 20 páginas)
 
 *Info*
 • #ping — Latencia
