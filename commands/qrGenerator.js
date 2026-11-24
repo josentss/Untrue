@@ -1,49 +1,11 @@
 import QRCode from 'qrcode';
-
-export async function qrGeneratorCommand(sock, m, args) {
-    try {
-        let text = args.join(' ').trim();
-
-        if (!text) {
-            return await sock.sendMessage(m.key.remoteJid, {
-                text: 'Uso correcto:\n#qr [texto/link]\nEjemplo: #qr fast.com'
-            }, { quoted: m });
-        }
-
-        let processedText = text;
-
-        if (text.match(/^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}/) && !text.match(/^https?:\/\//)) {
-            processedText = 'https://' + text;
-        }
-
-        const textLength = processedText.length;
-        let qrSize = 400;
-        let margin = 2;
-
-        if (textLength < 20) {
-            qrSize = 500;
-            margin = 4;
-        } else if (textLength > 100) {
-            qrSize = 450;
-            margin = 1;
-        }
-
-        const qrBuffer = await QRCode.toBuffer(processedText, {
-            width: qrSize,
-            margin: margin,
-            color: {
-                dark: '#000000FF',
-                light: '#FFFFFFFF'
-            },
-            errorCorrectionLevel: 'M'
-        });
-
-        await sock.sendMessage(m.key.remoteJid, {
-            image: qrBuffer,
-            caption: 'Código QR generado!'
-        }, { quoted: m });
-
-    } catch (error) {
-        await sock.sendMessage(m.key.remoteJid, { text: 'Error al generar el código QR' }, { quoted: m });
-    }
+import {quotedText} from '../core/urls.js';
+export async function qrGeneratorCommand(sock,m,args=[]){
+    try{
+        let text=args.join(' ').trim()||quotedText(m).trim();
+        if(!text||Buffer.byteLength(text)>1000){await sock.sendMessage(m.key.remoteJid,{text:'Usa #qr texto/enlace o responde a un texto (máximo 1000 bytes).'},{quoted:m});return;}
+        if(/^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:[/?#]\S*)?$/.test(text))text='https://'+text;
+        const image=await QRCode.toBuffer(text,{width:640,margin:4,errorCorrectionLevel:'M'});
+        await sock.sendMessage(m.key.remoteJid,{image,caption:'Código QR generado.'},{quoted:m});
+    }catch{await sock.sendMessage(m.key.remoteJid,{text:'No se pudo generar el código QR.'},{quoted:m});}
 }
