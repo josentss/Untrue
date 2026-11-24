@@ -17,7 +17,7 @@ export async function openAuthStore(folder, { codec, initCreds, decodeAppStateKe
         let raw;
         try { raw = await readFile(pathFor(name), 'utf8'); }
         catch (e) { if (e.code === 'ENOENT') return null; throw e; }
-        try { return JSON.parse(raw, codec.reviver); }
+        try { const parsed = JSON.parse(raw, codec.reviver); if (parsed === null) throw Error('null'); return parsed; }
         catch { throw Object.assign(new Error('Archivo de autenticación inválido'), { code: 'AUTH_CORRUPT' }); }
     }
     async function write(name, json) {

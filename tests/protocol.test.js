@@ -33,7 +33,7 @@ test('legacy credentials, LID keys, restart, and delete',async()=>{
 });
 test('corrupt credentials never replaced',async()=>{
     const dir=await mkdtemp(join(tmpdir(),'untrue-auth-test-'));
-    try { const path=join(dir,'creds.json'); await writeFile(path,'broken'); await assert.rejects(openAuthStore(dir,options),{code:'AUTH_CORRUPT'}); assert.equal(await readFile(path,'utf8'),'broken'); }
+    try { const path=join(dir,'creds.json'); await writeFile(path,'broken'); await assert.rejects(openAuthStore(dir,options),{code:'AUTH_CORRUPT'}); assert.equal(await readFile(path,'utf8'),'broken'); await writeFile(path,'null'); await assert.rejects(openAuthStore(dir,options),{code:'AUTH_CORRUPT'}); }
     finally { await rm(dir,{recursive:true,force:true}); }
 });
 test('owner check uses actual sender not group chat, and accepts alternative JID',()=>{
