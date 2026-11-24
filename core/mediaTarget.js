@@ -10,13 +10,13 @@ export function selectMedia(message) {
     if (!target) throw new MediaError('No se permite procesar contenido de visualización única.');
     // Do not treat a wrapped Lottie/sonorous sticker as WebP.
     if (target.lottieStickerMessage || target.stickerMessage?.isLottie) throw new MediaError('Los stickers Lottie todavía no se pueden convertir.');
-    if (target.audioStickerMessage || target.stickerMessage?.audioMessage) throw new MediaError('Este formato de sticker con sonido todavía no es compatible.');
+    if (target.audioStickerMessage) throw new MediaError('Este formato de sticker con sonido todavía no es compatible.');
     for (const type of ['sticker','image','video','audio','document']) {
         const media = target[type+'Message'];
         if (!media) continue;
         const mime = String(media.mimetype || '').split(';')[0].toLowerCase();
         const kind = type === 'document' ? (mime.startsWith('image/')?'image':mime.startsWith('video/')?'video':mime.startsWith('audio/')?'audio':'document') : type;
-        return {type,kind,media};
+        return {type,kind,media,...(type==='sticker'&&media.audioMessage?{audio:media.audioMessage}:{})};
     }
     throw new MediaError('Responde a una imagen, video o sticker compatible.');
 }

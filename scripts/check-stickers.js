@@ -7,7 +7,9 @@ import { withTemp,run } from '../core/process.js';
 import { ffmpeg } from '../core/config.js';
 import {createSticker,convertWebp,inspectMedia,extractAudio,LIMITS} from '../services/stickerEngine.js';
 import {saveBoundedStream,downloadToFile} from '../services/mediaDownload.js';
-import {proto} from 'baileys';
+import {proto,generateWAMessageFromContent} from 'baileys';
+import {installSoundStickerCodec,soundCodecAvailable} from '../core/soundStickerCodec.js';
+import {prepareStickerAudio,uploadStickerAudio} from '../services/stickerSound.js';
 
 await withTemp(async dir=>{
     const sub=async name=>{const path=join(dir,name);await mkdir(path);return path;};
@@ -20,9 +22,9 @@ await withTemp(async dir=>{
     assert.ok(meta.exif?.includes(Buffer.from('UntrueBot')));
     assert.ok((await stat(still.path)).size<=LIMITS.staticBytes);
     const {data}=await sharp(still.path).ensureAlpha().raw().toBuffer({resolveWithObject:true});
-    assert.equal(data[3],0);
-    const stillOut=await convertWebp(still.path,await sub('png'),'png');
-    assert.equal(stillOut.kind,'document');assert.equal((await sharp(stillOut.path).metadata()).hasAlpha,true);
+    assert.ok(data[3]>0,'default crop fills square without adding padding');
+    const stillOut=await convertWebp(still.path,await sub('png'));
+    assert.equal(stillOut.kind,'image');assert.equal((await sharp(stillOut.path).metadata()).hasAlpha,true);
     const video=join(dir,'motion.mp4');
     await run(ffmpeg,['-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc2=size=160x120:rate=12','-f','lavfi','-i','sine=frequency=440','-t','1.5','-c:v','libx264','-threads','2','-pix_fmt','yuv420p','-c:a','aac','-y',video],{timeout:30000});
     const animated=await createSticker(video,await sub('animated'),{kind:'video',name:'test'});
@@ -42,8 +44,6 @@ await withTemp(async dir=>{
     const gifSticker=await createSticker(gif,await sub('gif'),{kind:'image',crop:true});
     assert.equal(gifSticker.animated,true);
     assert.equal((await sharp(gifSticker.path,{animated:true}).metadata()).pageHeight,512);
-    const original=await convertWebp(gifSticker.path,await sub('original'),'archivo');
-    assert.equal(original.kind,'document');assert.deepEqual(await readFile(original.path),await readFile(gifSticker.path));
     const cropped=await createSticker(image,await sub('crop'),{kind:'image',crop:true});
     const cropRaw=await sharp(cropped.path).ensureAlpha().raw().toBuffer();
     assert.ok(cropRaw[3]>0,'crop removes transparent padding');
@@ -56,8 +56,25 @@ await withTemp(async dir=>{
     let called=false;
     await assert.rejects(downloadToFile({media:{fileLength:20},type:'image'},join(dir,'declared'),{limit:10,download:async()=>{called=true;}}),/demasiado grande/);
     assert.equal(called,false);
-    // A protocol round-trip must not be mistaken for native sound support.
-    const supported=proto.Message.StickerMessage.decode(proto.Message.StickerMessage.encode({isAnimated:true,audioMessage:{mimetype:'audio/ogg'}}).finish());
-    console.log('Native audio field preserved:',Boolean(supported.audioMessage));
+    assert.equal(soundCodecAvailable(),false,'locked upstream codec lacks sticker sound');
+    assert.equal(installSoundStickerCodec(),true);
+    assert.equal(soundCodecAvailable(),true);
+    const clip=await prepareStickerAudio(video,await sub('sound'),animated.durationMs);
+    assert.ok(clip);
+    const audioMessage=await uploadStickerAudio({waUploadToServer:async path=>{assert.ok((await stat(path)).size>0);return {mediaUrl:'https://example.invalid/a',directPath:'/a'};}},clip);
+    assert.equal(audioMessage.mimetype,'audio/ogg; codecs=opus');
+    const sticker={isAnimated:true,audioMessage};
+    const bytes=proto.Message.StickerMessage.encode(sticker).finish();
+    assert.ok(Buffer.from(bytes).includes(Buffer.from([210,1])),'wire field 26');
+    const sent=generateWAMessageFromContent('123@s.whatsapp.net',{stickerMessage:sticker},{userJid:'456@s.whatsapp.net'});
+    const decoded=proto.WebMessageInfo.decode(proto.WebMessageInfo.encode(sent).finish());
+    assert.deepEqual(Buffer.from(decoded.message.stickerMessage.audioMessage.mediaKey),Buffer.from(audioMessage.mediaKey));
+    assert.equal(decoded.message.stickerMessage.isAnimated,true);
+    assert.equal(proto.Message.StickerMessage.decode(proto.Message.StickerMessage.encode({width:512}).finish()).audioMessage,undefined);
+    const soundVideo=await convertWebp(animated.path,await sub('sound-video'),{audioPath:clip.path});
+    const streams=(await inspectMedia(soundVideo.path)).streams;
+    assert.ok(streams.some(s=>s.codec_type==='audio'&&s.codec_name==='aac'));
+    assert.ok(streams.some(s=>s.codec_type==='video'&&s.codec_name==='h264'));
+    console.log('Experimental wire field 26 and audio mux verified offline; native WhatsApp playback not verified');
     console.log('Static, animated, PNG, MP4, audio, limits and actual motion verified');
 });

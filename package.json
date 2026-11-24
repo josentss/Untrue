@@ -40,7 +40,8 @@
     "ws": "^8.21.3",
     "pino": "^8.20.0",
     "node-cache": "^5.1.2",
-    "baileys": "7.0.0-rc14"
+    "baileys": "7.0.0-rc14",
+    "protobufjs": "7.6.5"
   },
   "devDependencies": {
     "nodemon": "^3.1.4"

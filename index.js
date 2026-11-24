@@ -3,6 +3,9 @@ import 'dotenv/config';
 import express from 'express';
 import { connectToWhatsApp, connectionStatus, stopBot } from './bot.js';
 
+import { initializeSoundStickers } from './core/soundStickerCodec.js';
+initializeSoundStickers();
+
 const app = express();
 app.disable('x-powered-by');
 const port = Number(process.env.PORT || 3000);

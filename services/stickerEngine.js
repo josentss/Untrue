@@ -71,7 +71,7 @@ function videoFilter(size,fps,crop) {
         (crop?',crop='+size+':'+size:',pad='+size+':'+size+':(ow-iw)/2:(oh-ih)/2:color=black@0')+
         ',pad=512:512:(ow-iw)/2:(oh-ih)/2:color=black@0,setsar=1,fps='+fps;
 }
-export async function createSticker(input,dir,{kind,name,crop=false}={}) {
+export async function createSticker(input,dir,{kind,name,crop=true}={}) {
     const end=deadline();
     const encoded=join(dir,'encoded.webp'),output=join(dir,'sticker.webp');
     let animated=false;
@@ -80,7 +80,7 @@ export async function createSticker(input,dir,{kind,name,crop=false}={}) {
         if(!['jpeg','png','webp','gif','heif','tiff','avif'].includes(meta.format)) throw new MediaError('Formato de imagen no compatible.');
         const info=animationInfo(meta); animated=info.animated;
         if(animated&&!['webp','gif'].includes(meta.format)) throw new MediaError('Solo GIF y WebP admiten animaciones de imagen.');
-        const profiles=animated?[[78,512],[58,512],[40,448],[28,384],[15,320]]:[[88,512],[75,512],[58,512],[40,512],[25,448],[15,320]];
+        const profiles=animated?[[78,512],[58,512],[40,512],[28,512],[15,512]]:[[88,512],[75,512],[58,512],[40,512],[25,512],[15,512]];
         for(const [quality,size] of profiles) {
             remaining(end);
             // Animated sharp resize works on each page; never rotate or resize the tall stacked image manually.
@@ -94,38 +94,48 @@ export async function createSticker(input,dir,{kind,name,crop=false}={}) {
             }
             await image.webp({quality,alphaQuality:80,effort:4,...(animated?{loop:0,delay:info.delays}:{})}).toFile(encoded);
             await addExif(encoded,output,name);
-            if(await checkSticker(output,animated)) return {path:output,animated};
+            if(await checkSticker(output,animated)) return {path:output,animated,durationMs:animationInfo(await metadata(output)).durationMs};
         }
     } else if(kind==='video') {
         const info=await inspectMedia(input);
         const duration=videoDuration(info);
         animated=true;
-        const profiles=[[15,70,512],[12,50,512],[10,35,448],[8,25,384],[8,15,320]];
+        const profiles=[[15,70,512],[12,50,512],[10,35,512],[8,25,512],[6,15,512]];
         for(const [fps,quality,size] of profiles){
             await run(ffmpeg,[...baseArgs,...inputArgs,'-i',input,'-map','0:v:0','-t',String(Math.min(duration,9.95)),'-an','-vf',videoFilter(size,fps,crop),'-c:v','libwebp_anim','-quality',String(quality),'-compression_level','4','-loop','0','-threads','2',encoded],{timeout:remaining(end)});
             const meta=await metadata(encoded);
             // Extremely short videos may encode to a single frame; classify from actual output.
             animated=(meta.pages||1)>1;
             await addExif(encoded,output,name);
-            if(await checkSticker(output,animated)) return {path:output,animated};
+            if(await checkSticker(output,animated)) return {path:output,animated,durationMs:animationInfo(await metadata(output)).durationMs};
         }
     } else throw new MediaError('Solo imágenes, GIF, videos o stickers WebP.');
     throw new MediaError('No se pudo comprimir el sticker dentro del límite de WhatsApp.');
 }
-export async function convertWebp(input,dir,mode='') {
+export async function convertWebp(input,dir,{audioPath}={}) {
     const meta=await metadata(input);
     if(meta.format!=='webp') throw new MediaError('El sticker no contiene WebP compatible.');
     const info=animationInfo(meta);
-    if(mode==='archivo') return {path:input,kind:'document',mime:'image/webp',filename:'sticker.webp'};
-    if(!info.animated||mode==='imagen'||mode==='png'){
+    if(!info.animated&&!audioPath){
         const path=join(dir,'sticker.png');
         await sharp(input,sharpOptions).png().toFile(path);
-        return {path,kind:mode==='png'?'document':'image',mime:'image/png',filename:'sticker.png'};
+        return {path,kind:'image',mime:'image/png'};
+    }
+    if(audioPath){
+        const sound=await inspectMedia(audioPath);
+        const seconds=Number(sound.format?.duration);
+        if(!sound.streams?.some(s=>s.codec_name==='opus')||!Number.isFinite(seconds)||seconds<=0||seconds>10.1) throw new MediaError('Audio de sticker no compatible.');
+        if(!info.animated){
+            const frame=join(dir,'still.png'),path=join(dir,'sticker.mp4');
+            await sharp(input,sharpOptions).flatten({background:'#000000'}).png().toFile(frame);
+            await run(ffmpeg,[...baseArgs,'-loop','1','-i',frame,...inputArgs,'-i',audioPath,'-t',String(seconds),'-map','0:v:0','-map','1:a:0','-vf','pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p','-c:v','libx264','-crf','18','-preset','veryfast','-c:a','aac','-b:a','128k','-movflags','+faststart',path],{timeout:30000});
+            return {path,kind:'video',mime:'video/mp4'};
+        }
     }
     // Decode all frames with libvips/WebP, preserving alpha and per-frame timing.
     // Limit decoded pixels before allocation and never quantize through GIF.
-    if(info.pages*512*512>LIMITS.pixels) throw new MediaError('Animación demasiado grande.');
-    const {data,info:raw}=await sharp(input,animatedOptions).resize(512,512,{fit:'contain',background:transparent}).ensureAlpha().raw().toBuffer({resolveWithObject:true});
+    if(info.pages*meta.width*(meta.pageHeight||meta.height)>LIMITS.pixels) throw new MediaError('Animación demasiado grande.');
+    const {data,info:raw}=await sharp(input,animatedOptions).ensureAlpha().raw().toBuffer({resolveWithObject:true});
     const height=raw.height/info.pages;
     if(!Number.isInteger(height)||raw.channels!==4||raw.width*height*info.pages>LIMITS.pixels) throw new MediaError('Animación demasiado grande.');
     const frameSize=raw.width*height*4;
@@ -140,7 +150,7 @@ export async function convertWebp(input,dir,mode='') {
     }
     const manifest=join(dir,'frames.txt'),path=join(dir,'sticker.mp4');
     await writeFile(manifest,entries.join('\n')+'\n');
-    await run(ffmpeg,[...baseArgs,'-f','concat','-safe','1','-i',manifest,'-t',String(info.durationMs/1000),'-vf','fps=25,format=yuv420p','-c:v','libx264','-crf','21','-preset','veryfast','-threads','2','-movflags','+faststart',path],{timeout:remaining(end)});
+    await run(ffmpeg,[...baseArgs,'-f','concat','-safe','1','-i',manifest,...(audioPath?[...inputArgs,'-i',audioPath,'-map','0:v:0','-map','1:a:0','-c:a','aac','-b:a','128k']:['-an']),'-t',String(info.durationMs/1000),'-vf','fps=25,pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p','-c:v','libx264','-crf','18','-preset','veryfast','-threads','2','-movflags','+faststart',path],{timeout:remaining(end)});
     return {path,kind:'video',mime:'video/mp4'};
 }
 export async function extractAudio(input,dir){
