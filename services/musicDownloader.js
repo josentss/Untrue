@@ -26,7 +26,7 @@ function metadata(stdout){
 export function mediaInfo(data,seconds=data.duration){
     return {title:cleanText(data.title,'Contenido'),author:cleanText(data.artist||data.uploader||data.channel,'Desconocido'),duration:seconds,durationFormatted:durationText(seconds),url:cleanText(data.webpage_url,'',2048),description:cleanText(data.description,'',200)};
 }
-function childEnv(dir){
+export function childEnv(dir){
     // No bot API keys, auth path or inherited custom plugin configuration.
     const out={PATH:process.env.PATH||'',HOME:dir,TMPDIR:dir,TMP:dir,TEMP:dir,LANG:'C.UTF-8'};
     for(const key of ['SystemRoot','WINDIR','PATHEXT','COMSPEC'])if(process.env[key])out[key]=process.env[key];
@@ -41,7 +41,7 @@ async function diskUsage(dir){
     }
     return bytes;
 }
-async function boundedRun(args,dir,limit,runner){
+export async function boundedRun(args,dir,limit,runner){
     const controller=new AbortController();
     let checking=false;
     const timer=setInterval(async()=>{
