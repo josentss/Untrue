@@ -57,3 +57,52 @@ test('protocol logging drops secret payloads and aggregates repeats',()=>{
     assert.equal(out[1][0].suppressed,1);
     assert.equal(JSON.stringify(out).includes('test-secret'),false);
 });
+
+import { eventAge, historyPolicy } from '../core/messageTiming.js';
+import { installSignalConsoleGuard } from '../core/signalConsole.js';
+test('concurrent writes retain ordering per key and persist across reopen', async()=>{
+    const dir=await mkdtemp(join(tmpdir(),'untrue-auth-concurrency-'));
+    try {
+        const a=await openAuthStore(dir,options);
+        const many=Object.fromEntries(Array.from({length:32},(_,i)=>['k'+i,Buffer.from('one')]));
+        const first=a.state.keys.set({session:many});
+        const second=a.state.keys.set({session:{k31:Buffer.from('two'),k0:null}});
+        const read=a.state.keys.get('session',['k31','k0']);
+        await Promise.all([first,second]);
+        assert.deepEqual(await read,{k31:Buffer.from('two'),k0:null});
+        await a.flush();
+        const b=await openAuthStore(dir,options);
+        assert.deepEqual(await b.state.keys.get('session',['k31','k0','k1']),{k31:Buffer.from('two'),k0:null,k1:Buffer.from('one')});
+    } finally { await rm(dir,{recursive:true,force:true}); }
+});
+test('history policy retains initial identity synchronization',()=>{
+    const types={FULL:1,RECENT:2,INITIAL_BOOTSTRAP:3,NON_BLOCKING_DATA:4};
+    const fresh=historyPolicy({registered:true,accountSyncCounter:0},types);
+    const established=historyPolicy({registered:true,accountSyncCounter:1},types);
+    assert.equal(fresh({syncType:2}),true);
+    assert.equal(established({syncType:2}),false);
+    assert.equal(established({syncType:3}),true);
+    assert.equal(established({syncType:4}),true);
+    assert.equal(fresh({syncType:1}),false);
+});
+test('timestamps measure delivery delay without message content',()=>{
+    assert.equal(eventAge(100,112000),12000);
+    assert.equal(eventAge({toNumber:()=>100},102000),2000);
+    assert.equal(eventAge(undefined,1000),null);
+    assert.equal(eventAge(200,1000),null);
+});
+test('only libsignal console calls are sanitized and counted',()=>{
+    const output=[]; let stack='at /app/node_modules/libsignal/src/session_record.js:1';
+    const target=Object.fromEntries(['log','info','debug','warn','error','dir','trace'].map(name=>[name,(...args)=>output.push(args)]));
+    const guard=installSignalConsoleGuard({target,stack:()=>stack});
+    try {
+        target.info('Closing session:',{privateKey:'fake-secret'});
+        target.error('unknown', {rootKey:'fake-secret'});
+        stack='at /app/bot.js:1'; target.error('normal app error');
+        guard.flush();
+        assert.equal(output.length,2);
+        assert.equal(output[0][0],'normal app error');
+        assert.equal(JSON.stringify(output).includes('fake-secret'),false);
+        assert.equal(JSON.parse(output[1][0]).counts['info:session_rotation'],1);
+    } finally {guard.restore();}
+});

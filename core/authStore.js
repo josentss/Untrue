@@ -6,11 +6,32 @@ import { randomUUID } from 'node:crypto';
 // Single process only. Never interpret corrupt credentials as an absent session.
 export async function openAuthStore(folder, { codec, initCreds, decodeAppStateKey }) {
     await mkdir(folder, { recursive: true, mode: 0o700 });
-    let tail = Promise.resolve();
-    function serial(fn) {
-        const pending = tail.then(fn);
-        tail = pending.catch(() => {});
-        return pending;
+    // Serialize only operations touching the same file, not independent keys.
+    const locks = new Map();
+    const pending = new Set();
+    let active = 0;
+    const waiting = [];
+    async function limited(fn) {
+        if (active >= 8) await new Promise(resolve => waiting.push(resolve));
+        else active++;
+        try { return await fn(); }
+        finally {
+            const next = waiting.shift();
+            if (next) next();
+            else active--;
+        }
+    }
+    function serial(name, fn) {
+        const key = pathFor(name);
+        const task = (locks.get(key) || Promise.resolve()).then(() => limited(fn));
+        const barrier = task.catch(() => {});
+        locks.set(key, barrier);
+        pending.add(barrier);
+        void barrier.then(() => {
+            pending.delete(barrier);
+            if (locks.get(key) === barrier) locks.delete(key);
+        });
+        return task;
     }
     const pathFor = name => join(folder, name.replace(/\//g, '__').replace(/:/g, '-'));
     async function read(name) {
@@ -41,33 +62,30 @@ export async function openAuthStore(folder, { codec, initCreds, decodeAppStateKe
             creds,
             keys: {
                 get(type, ids) {
-                    return serial(async () => {
-                        const entries = await Promise.all(ids.map(async id => {
-                            let value = await read(type + '-' + id + '.json');
-                            if (type === 'app-state-sync-key' && value) value = decodeAppStateKey(value);
-                            return [id, value];
-                        }));
-                        return Object.fromEntries(entries);
-                    });
+                    return Promise.all(ids.map(async id => {
+                        const name = type + '-' + id + '.json';
+                        let value = await serial(name, () => read(name));
+                        if (type === 'app-state-sync-key' && value) value = decodeAppStateKey(value);
+                        return [id, value];
+                    })).then(Object.fromEntries);
                 },
                 set(data) {
                     const entries = Object.entries(data).flatMap(([type, values]) => Object.entries(values).map(([id, value]) => ({
                         name: type + '-' + id + '.json',
                         json: value == null ? null : JSON.stringify(value, codec.replacer)
                     })));
-                    return serial(async () => {
-                        for (const {name,json} of entries) {
-                            if (json === null) await remove(name);
-                            else await write(name,json);
-                        }
+                    const writes = entries.map(({name,json}) => serial(name, () => json === null ? remove(name) : write(name,json)));
+                    return Promise.allSettled(writes).then(results => {
+                        const failure = results.find(r => r.status === 'rejected');
+                        if (failure) throw failure.reason;
                     });
                 }
             }
         },
         saveCreds() {
             const json = JSON.stringify(creds, codec.replacer);
-            return serial(() => write('creds.json', json));
+            return serial('creds.json', () => write('creds.json', json));
         },
-        flush: () => tail
+        async flush() { while (pending.size) await Promise.all([...pending]); }
     };
 }

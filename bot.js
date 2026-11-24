@@ -8,10 +8,13 @@ import { messageKeys } from './core/identity.js';
 import { authDir, maxJobs } from './core/config.js';
 import { normalizedMessage, commandOf, RecentKeys } from './core/messages.js';
 import { JobQueue } from './core/queue.js';
+import { eventAge, historyPolicy } from './core/messageTiming.js';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 
 const logger = Pino({ level: process.env.LOG_LEVEL || 'info', redact: ['key.remoteJid', 'key.participant', 'msgAttrs.from', 'msgAttrs.participant', 'qr'] });
 const protocolLogger = createProtocolLogger(logger, {level:process.env.BAILEYS_LOG_LEVEL || 'warn'});
-const summaryTimer = setInterval(() => protocolLogger.flush(), 60000); summaryTimer.unref();
+const lag = monitorEventLoopDelay({ resolution: 20 }); lag.enable();
+const summaryTimer = setInterval(() => { protocolLogger.flush(); const maxMs = Math.round(lag.max / 1e6); if (maxMs > 500) logger.warn({maxMs,p99Ms:Math.round(lag.percentile(99)/1e6)}, 'Demora del event loop'); lag.reset(); }, 60000); summaryTimer.unref();
 const seen = new RecentKeys();
 const retryCache = new NodeCache({ stdTTL: 600, maxKeys: 10000, useClones: false, checkperiod: 60 });
 const sentCache = new NodeCache({ stdTTL: 600, maxKeys: 1000, useClones: false, checkperiod: 60 });
@@ -42,6 +45,7 @@ export async function connectToWhatsApp() {
     const epoch = ++generation;
     try {
         await pendingCredentials;
+        await currentAuth?.flush();
         const auth = await openAuthStore(authDir, {codec:BufferJSON, initCreds:initAuthCreds, decodeAppStateKey:v=>proto.Message.AppStateSyncKeyData.fromObject(v)});
         currentAuth = auth;
         const { state, saveCreds } = auth;
@@ -49,7 +53,8 @@ export async function connectToWhatsApp() {
         const sock = makeWASocket({
             auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, protocolLogger) },
             logger:protocolLogger, markOnlineOnConnect: false, syncFullHistory: false,
-            connectTimeoutMs: 30000, maxMsgRetryCount: 3, msgRetryCounterCache: retryCache,
+            shouldSyncHistoryMessage: historyPolicy(state.creds, proto.HistorySync.HistorySyncType),
+            connectTimeoutMs: 30000, defaultQueryTimeoutMs: 20000, maxMsgRetryCount: 3, msgRetryCounterCache: retryCache,
             getMessage: async key => messageKeys(key).map(k=>sentCache.get(k)).find(Boolean)
         });
         socket = sock;
@@ -80,22 +85,25 @@ export async function connectToWhatsApp() {
                 retry(code === DisconnectReason.restartRequired);
             }
         });
-        sock.ev.on('messages.upsert', ({ messages, type }) => {
+        sock.ev.on('messages.upsert', ({ messages, type, requestId }) => {
             if (epoch !== generation || stopping || socket !== sock) return;
             for (const raw of messages || []) {
                 if (raw.key?.fromMe) cacheMessage(raw);
-                if (type !== 'notify' || status !== 'connected') continue;
+                if (type !== 'notify' || requestId || status !== 'connected') continue;
                 const m = normalizedMessage(raw);
                 const command = commandOf(m);
                 if (!command) continue;
                 const keys = messageKeys(m.key);
                 if (!keys.length || keys.map(k=>seen.seen(k)).some(Boolean)) continue;
+                const receivedAt = Date.now();
+                const incomingAgeMs = eventAge(raw.messageTimestamp, receivedAt);
+                logger.info({command:command.name, incomingAgeMs}, 'Comando recibido');
                 const execute = async () => {
                     if (socket !== sock || status !== 'connected') return;
                     const started = Date.now();
                     const { handleCommand } = await import('./commands/commandHandler.js');
                     await handleCommand(sock, m, command.name, command.args);
-                    logger.info({ command: command.name, ms: Date.now() - started }, 'Comando procesado');
+                    logger.info({ command: command.name, ms: Date.now() - started, queueMs:started-receivedAt, incomingAgeMs, ...(incomingAgeMs === null ? {} : {estimatedTotalMs:incomingAgeMs+Date.now()-receivedAt}) }, 'Comando procesado');
                 };
                 const task = lightweight.has(command.name) ? execute() : jobs.run(execute);
                 task.catch(async error => {
@@ -117,6 +125,6 @@ export async function stopBot() {
     current?.end(undefined);
     await pendingCredentials;
     await currentAuth?.flush();
-    clearInterval(summaryTimer); protocolLogger.flush();
+    clearInterval(summaryTimer); lag.disable(); protocolLogger.flush();
     sentCache.close(); retryCache.close();
 }

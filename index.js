@@ -1,3 +1,4 @@
+import './core/signalPreload.js';
 import 'dotenv/config';
 import express from 'express';
 import { connectToWhatsApp, connectionStatus, stopBot } from './bot.js';
