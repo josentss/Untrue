@@ -26,9 +26,13 @@ export async function helpCommand(sock, m) {
 • #traducir [idioma] — Traducir texto
 
 *Convertidores*
-• #s — Crear sticker
-• #sm — Sticker a media
-• #toa — Extraer audio
+• #s — Sticker desde imagen, GIF o video (máx. 10 s)
+• #s recortar — Ajustar al cuadrado
+• #sm — Sticker a PNG o MP4
+• #sm imagen — Primer fotograma
+• #sm png — PNG como archivo
+• #sm archivo — WebP original
+• #toa — Extraer audio de video/audio
 • #tot — Extraer texto
 • #toi — Documento a imagen
 
