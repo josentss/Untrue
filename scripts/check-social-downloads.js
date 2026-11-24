@@ -4,7 +4,7 @@ import {join} from 'node:path';
 import {readFile,copyFile,access} from 'node:fs/promises';
 import {withTemp,run} from '../core/process.js';
 import {ffmpeg,ytDlp} from '../core/config.js';
-import {withSocialDownload,pinterestItems,normalizeSocialFile} from '../services/socialDownloader.js';
+import {withSocialDownload,pinterestItems,instagramPublicItems,normalizeSocialFile} from '../services/socialDownloader.js';
 await withTemp(async dir=>{
     const image=join(dir,'fixture.png'),video=join(dir,'fixture.mp4');
     await sharp({create:{width:120,height:100,channels:3,background:'red'}}).png().toFile(image);
@@ -106,5 +106,17 @@ await withTemp(async dir=>{
         return fetcher(url);
     };
     await withSocialDownload('instagram','https://www.instagram.com/reel/DfzvzeHxHKW/?lqvp=NTc4MTIwNjQ2YQ==',{kind:'video'},async item=>assert.equal(item.kind,'video'),{runner:unavailableRunner,fetcher:reelFetch});
+    const publicHtml='<script type="application/json">'+JSON.stringify({unrelated:{shortcode:'other',__typename:'GraphImage',display_url:a},post:{shortcode:'ABC',__typename:'GraphSidecar',edge_sidecar_to_children:{edges:[{node:{__typename:'GraphImage',display_url:a}},{node:{__typename:'GraphVideo',video_url:b}}]}}})+'</script>';
+    assert.deepEqual(instagramPublicItems(publicHtml,'ABC'),[{kind:'image',url:a},{kind:'video',url:b}]);
+    assert.deepEqual(instagramPublicItems(publicHtml,'missing'),[]);
+    const publicFetch=async url=>{
+        if(url.startsWith('https://api.bk9.dev/'))throw new DOMException('The operation timed out','TimeoutError');
+        if(url==='https://www.instagram.com/p/ABC/')return new Response(publicHtml);
+        return fetcher(url);
+    };
+    await withSocialDownload('instagram','https://instagram.com/p/ABC/',{kind:'post'},async(item,i)=>assert.equal(item.kind,i?'video':'image'),{fetcher:publicFetch});
+    let restrictedCalls=0;
+    await assert.rejects(withSocialDownload('instagram','https://instagram.com/p/ABC/',{kind:'post'},async()=>assert.fail('restricted media must not send'),{fetcher:async()=>{restrictedCalls++;return new Response(null,{status:403});}}),{code:'restricted'});
+    assert.equal(restrictedCalls,1);
     console.log('Social media routing, mixed carousel, silent MP4, partial errors and cleanup verified');
 });

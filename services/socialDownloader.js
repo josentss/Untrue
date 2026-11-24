@@ -88,6 +88,48 @@ async function pinterestMedia(input,end,fetcher){
     return pinterestItems(await readBounded(res,4*1024*1024),input.id);
 }
 function canTryAlternative(error){return ['unavailable','timeout','failed'].includes(publicError(error).code);}
+// Public, structured page data only. Never infer a carousel from its poster.
+export function instagramPublicItems(html,shortcode){
+    const $=load(html);
+    let post;
+    for(const el of $('script[type="application/json"]').toArray()){
+        try{
+            const stack=[JSON.parse($(el).text())];let scanned=0;
+            while(stack.length&&scanned++<50000){
+                const obj=stack.pop();
+                if(!obj||typeof obj!=='object')continue;
+                if((obj.shortcode===shortcode||obj.code===shortcode)&&(obj.__typename||obj.media_type||obj.display_url||obj.video_url||obj.carousel_media||obj.edge_sidecar_to_children)){
+                    if(obj.is_private===true||obj.owner?.is_private===true||obj.user?.is_private===true)throw new DownloadError('restricted','La publicación no es pública.');
+                    post=obj;break;
+                }
+                for(const value of Object.values(obj))if(value&&typeof value==='object')stack.push(value);
+            }
+        }catch(e){if(e instanceof DownloadError)throw e;}
+        if(post)break;
+    }
+    if(!post)return [];
+    const sidecar=post.edge_sidecar_to_children?.edges;
+    const carousel=post.__typename==='GraphSidecar'||post.media_type===8||Array.isArray(sidecar)||Array.isArray(post.carousel_media);
+    const nodes=carousel?(Array.isArray(sidecar)?sidecar.map(e=>e?.node):post.carousel_media):[post];
+    if(!Array.isArray(nodes)||!nodes.length||nodes.length>MAX_ITEMS)return [];
+    const result=[];
+    for(const node of nodes){
+        if(!node||node.is_private===true||node.owner?.is_private===true||node.user?.is_private===true)return [];
+        const video=node.is_video===true||node.media_type===2||node.__typename==='GraphVideo';
+        const variants=video?node.video_versions:node.image_versions2?.candidates;
+        const best=Array.isArray(variants)?[...variants].sort((a,b)=>(b.width||0)*(b.height||0)-(a.width||0)*(a.height||0))[0]?.url:undefined;
+        const url=video?(node.video_url||best):(node.display_url||best);
+        if(!url)return [];
+        result.push({kind:video?'video':'image',url:mediaUrl('instagram',url)});
+    }
+    return result;
+}
+async function publicInstagram(input,end,fetcher){
+    const {res}=await safeResponse(input.url,v=>socialUrl('instagram',v).url,{fetcher,signal:AbortSignal.timeout(remaining(end,12000)),headers:{Accept:'text/html'}});
+    const html=await readBounded(res,4*1024*1024);
+    const shortcode=new URL(input.url).pathname.split('/')[2];
+    return instagramPublicItems(html,shortcode);
+}
 async function instagramMedia(input,end,fetcher){
     let last=notAvailable();
     for(const endpoint of ['instagram','instagram2']){
@@ -102,6 +144,13 @@ async function instagramMedia(input,end,fetcher){
             console.info('Instagram proveedor fallido '+JSON.stringify({endpoint,reason:publicError(e).code}));
             if(!canTryAlternative(e))throw e;
         }
+    }
+    try{
+        const items=await publicInstagram(input,end,fetcher);
+        if(items.length){console.info('Instagram proveedor '+JSON.stringify({endpoint:'public_metadata',items:items.length}));return items;}
+    }catch(e){
+        console.info('Instagram proveedor fallido '+JSON.stringify({endpoint:'public_metadata',reason:publicError(e).code}));
+        if(!canTryAlternative(e))throw e;
     }
     throw last;
 }
@@ -191,7 +240,7 @@ export async function withSocialDownload(platform,query,{kind='video',position}=
                 catch(e){if(!canTryAlternative(e))throw e;items=[];}
                 if(!items.length)items=undefined; // yt-dlp resolves video without a direct MP4
             }else if(platform==='tiktok'&&input.photo){
-                const data=await photoTikTok(input,dir,end,runner);
+                const data=await photoTikTok(initial.short?initial:input,dir,end,runner);
                 items=kind==='audio'?(data.music?[{kind:'audio',url:data.music}]:[]):data.items;
             }
             if(items===undefined){
