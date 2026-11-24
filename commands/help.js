@@ -26,7 +26,7 @@ export async function helpCommand(sock, m) {
 • #traducir [idioma] — Traducir texto
 
 *Convertidores*
-• #s — Crear sticker cuadrado (máx. 10 s)
+• #s — Crear sticker cuadrado (máx. 15 s)
 • #sm — Sticker a imagen o video
 • #toa — Extraer audio de video/audio
 • #tot — Extraer texto

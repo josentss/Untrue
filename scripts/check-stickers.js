@@ -9,6 +9,7 @@ import {createSticker,convertWebp,inspectMedia,extractAudio,LIMITS,stickerExif} 
 import {saveBoundedStream,downloadToFile} from '../services/mediaDownload.js';
 import {proto,generateWAMessageContent,generateWAMessageFromContent} from 'baileys';
 import {installSoundStickerCodec,soundCodecAvailable} from '../core/soundStickerCodec.js';
+import {stationaryWebp} from '../core/stationaryWebp.js';
 import {prepareStickerAudio,uploadStickerAudio} from '../services/stickerSound.js';
 
 await withTemp(async dir=>{
@@ -53,8 +54,8 @@ await withTemp(async dir=>{
     const cropRaw=await sharp(cropped.path).ensureAlpha().raw().toBuffer();
     assert.ok(cropRaw[3]>0,'crop removes transparent padding');
     const longVideo=join(dir,'long.mp4');
-    await run(ffmpeg,['-hide_banner','-loglevel','error','-f','lavfi','-i','color=size=64x64:rate=5','-t','11','-c:v','libx264','-threads','2','-y',longVideo],{timeout:15000});
-    await assert.rejects(createSticker(longVideo,await sub('long'),{kind:'video'}),/10 segundos/);
+    await run(ffmpeg,['-hide_banner','-loglevel','error','-f','lavfi','-i','color=size=64x64:rate=5','-t','16','-c:v','libx264','-threads','2','-y',longVideo],{timeout:15000});
+    await assert.rejects(createSticker(longVideo,await sub('long'),{kind:'video'}),/15 segundos/);
     const audio=await extractAudio(video,await sub('audio'));
     assert.equal((await inspectMedia(audio)).streams[0].codec_name,'mp3');
     await assert.rejects(saveBoundedStream(Readable.from([Buffer.alloc(9)]),join(dir,'too-big'),{limit:8}),/demasiado grande/);
@@ -87,7 +88,53 @@ await withTemp(async dir=>{
     assert.equal(tenClip.seconds,10);
     const shortClip=await prepareStickerAudio(video,await sub('short-audio'),8000);
     assert.ok(shortClip.durationMs<2000,'do not artificially extend shorter source audio');
-    console.log('Full 8/10-second audio, FPS and batched recovery verified');
+    // Realistic motion and detail at 15 seconds force the compression fallback.
+    const complex=join(dir,'complex-15.mp4');
+    await run(ffmpeg,['-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc2=size=320x240:rate=30','-f','lavfi','-i','sine=frequency=440','-t','15','-c:v','libx264','-pix_fmt','yuv420p','-threads','2','-c:a','aac','-y',complex],{timeout:30000});
+    const compressed=await createSticker(complex,await sub('complex'),{kind:'video'});
+    assert.ok(compressed.animated);
+    assert.ok(compressed.bytes<=LIMITS.animatedBytes);
+    assert.ok(compressed.durationMs>=14800&&compressed.durationMs<=15000);
+    assert.ok(compressed.fps>=6);
+    const longClip=await prepareStickerAudio(complex,await sub('long-audio'),compressed.durationMs);
+    assert.ok(longClip.durationMs>=14800&&longClip.durationMs<=15000);
+    assert.equal(longClip.seconds,15);
+    assert.ok((await stat(longClip.path)).size<=128*1024);
+    const longRecovered=await convertWebp(compressed.path,await sub('long-recovered'),{audioPath:longClip.path});
+    const lp=await inspectMedia(longRecovered.path);
+    for(const kind of ['video','audio']) assert.ok(Number(lp.streams.find(s=>s.codec_type===kind).duration)>=14.8);
+    // High FPS long source exercises the 450-frame limit and bounded batches.
+    const simple15=join(dir,'simple-15.mp4');
+    await run(ffmpeg,['-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=black:size=160x120:rate=30','-f','lavfi','-i','color=c=white:size=24x24:rate=30','-filter_complex','[0:v][1:v]overlay=x=mod(120*t\\,130):y=40','-t','15','-c:v','libx264','-pix_fmt','yuv420p','-threads','2','-y',simple15],{timeout:30000});
+    const smooth15=await createSticker(simple15,await sub('smooth15'),{kind:'video'});
+    assert.ok(smooth15.fps>=24&&smooth15.frames>300);
+    assert.ok(smooth15.durationMs>=14800&&smooth15.durationMs<=15000);
+    assert.equal(await prepareStickerAudio(simple15,await sub('silent15'),smooth15.durationMs),null);
+    const smoothRecovered=await convertWebp(smooth15.path,await sub('smooth-recovered'));
+    assert.ok(Number((await inspectMedia(smoothRecovered.path)).format.duration)>=14.8);
+    const stationary=join(dir,'stationary.mp4');
+    await run(ffmpeg,['-v','error','-f','lavfi','-i','color=size=128x128:rate=30','-f','lavfi','-i','sine=frequency=440','-t','3','-c:v','libx264','-threads','2','-c:a','aac','-y',stationary],{timeout:15000});
+    const stationarySticker=await createSticker(stationary,await sub('stationary'),{kind:'video'});
+    assert.equal(stationarySticker.animated,true);
+    assert.ok(Math.abs(stationarySticker.durationMs-3000)<100);
+    const stationaryMeta=await sharp(stationarySticker.path,{animated:true}).metadata();
+    assert.equal(stationaryMeta.pages,2);
+    assert.deepEqual(stationaryMeta.delay,[1500,1500]);
+    assert.equal(stationaryMeta.width,512);assert.equal(stationaryMeta.pageHeight,512);
+    assert.ok(stationaryMeta.exif.includes(Buffer.from('UntrueBot')));
+    const stationaryClip=await prepareStickerAudio(stationary,await sub('stationary-audio'),stationarySticker.durationMs);
+    assert.ok(stationaryClip.durationMs>=2900);
+    const stationaryRecovered=await convertWebp(stationarySticker.path,await sub('stationary-recovery'),{audioPath:stationaryClip.path});
+    const stationaryProbe=await inspectMedia(stationaryRecovered.path);
+    for(const kind of ['video','audio']) assert.ok(Number(stationaryProbe.streams.find(s=>s.codec_type===kind).duration)>=2.9);
+    const alphaFrame=await sharp({create:{width:512,height:512,channels:4,background:{r:200,g:10,b:10,alpha:0.5}}}).webp().toBuffer();
+    const alphaAnimation=stationaryWebp(alphaFrame,{width:512,height:512,durationMs:15000,exif:stickerExif()});
+    const alphaMeta=await sharp(alphaAnimation,{animated:true}).metadata();
+    assert.equal(alphaMeta.pages,2);assert.equal(alphaMeta.hasAlpha,true);
+    assert.deepEqual(alphaMeta.delay,[7500,7500]);
+    const rgba=await sharp(alphaAnimation).ensureAlpha().raw().toBuffer();
+    assert.ok(rgba[3]>0&&rgba[3]<255);
+    console.log('Full 8/10/15-second audio, detailed fallback, high FPS and batched recovery verified');
     const clip=await prepareStickerAudio(video,await sub('sound'),animated.durationMs);
     assert.ok(clip);
     const audioMessage=await uploadStickerAudio({waUploadToServer:async path=>{assert.ok((await stat(path)).size>0);return {mediaUrl:'https://example.invalid/a',directPath:'/a'};}},clip);
