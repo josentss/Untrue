@@ -28,7 +28,12 @@ def guarded_send(session, request, **kwargs):
             or not any(host == d or host.endswith("." + d) for d in domains)):
         raise requests.exceptions.InvalidURL("Untrue gallery destination not supported")
     # Requests invokes Session.send again for each redirect.
-    return original_send(session, request, **kwargs)
+    response = original_send(session, request, **kwargs)
+    if response.status_code in (401, 403, 429):
+        print('UNTRUE_ACCESS_RESTRICTED' if response.status_code != 429 else 'UNTRUE_RATE_LIMIT', file=sys.stderr)
+        response.close()
+        raise requests.exceptions.HTTPError('HTTP Error %s' % response.status_code, response=response)
+    return response
 
 requests.sessions.Session.send = guarded_send
 raise SystemExit(gallery_dl.main())

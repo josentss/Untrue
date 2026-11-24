@@ -23,6 +23,7 @@ export async function socialCommand(sock,m,args,{platform,kind,command,allowPosi
         await sock.sendMessage(jid,{text:'Descargando contenido…'},{quoted:m});
         await withSocialDownload(platform,query,{kind,position},async(item,index,total)=>{
             const content={[item.kind]:{url:item.path},mimetype:item.mime};
+            if(item.kind==='video'&&Number.isSafeInteger(item.seconds))content.seconds=item.seconds;
             if(item.kind==='audio')content.ptt=false;
             else if(total>1)content.caption=(index+1)+'/'+total;
             await sock.sendMessage(jid,content,{quoted:m});

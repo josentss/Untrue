@@ -174,5 +174,20 @@ await withTemp(async dir=>{
     assert.equal(fallbackCalls,1);
     await assert.rejects(download('instagram','https://instagram.com/p/ABC/',{kind:'post'},async()=>assert.fail('restricted'),{
         runner:async()=>{throw Object.assign(Error('gallery failed'),{diagnostic:'login required'});},fetcher:async()=>assert.fail('no fallback on restricted')}),{code:'restricted'});
+    const originalPinVideo=async(bin,args,opts)=>{
+        if(bin!==galleryPython)return run(bin,args,opts);
+        const folder=args[args.indexOf('--directory')+1],path=join(folder,'video.mp4');
+        await copyFile(video,path);await writeFile(join(folder,'manifest.txt'),path+'\n');
+        return {stdout:'',stderr:''};
+    };
+    await download('pinterest','https://www.pinterest.com/pin/123/',{kind:'post'},async item=>{
+        assert.equal(item.kind,'video');assert.ok(item.seconds>=2);
+        const mp4=await readFile(item.path);assert.ok(mp4.indexOf('moov')<mp4.indexOf('mdat'));
+    },{runner:originalPinVideo,fetcher:async()=>assert.fail('gallery success must not use another provider')});
+    await assert.rejects(download('instagram','https://instagram.com/p/ABC/',{kind:'post'},async()=>assert.fail('rate limited'),{
+        runner:async()=>{throw Object.assign(Error('gallery failed'),{diagnostic:'UNTRUE_RATE_LIMIT'});},fetcher:async()=>assert.fail('no fallback on rate limit')}),{code:'remote_limit'});
+    let deliveries=0;
+    await assert.rejects(download('instagram','https://instagram.com/p/ABC/',{kind:'post'},async()=>{deliveries++;throw Error('send failed');},{runner:galleryRunner,fetcher:async()=>assert.fail('no fallback on send error')}),{code:'send'});
+    assert.equal(deliveries,1);
     console.log('Social media routing, mixed carousel, silent MP4, partial errors and cleanup verified');
 });
