@@ -9,17 +9,22 @@ export async function withTemp(fn) {
     try { return await fn(dir); }
     finally { await rm(dir, { recursive: true, force: true }); }
 }
-export function run(file, args, { timeout = 90000, maxOutput = 1024 * 1024 } = {}) {
+export function run(file, args, { timeout = 90000, maxOutput = 1024 * 1024, signal, env, processGroup = false, diagnostics = false } = {}) {
     return new Promise((resolve, reject) => {
-        const child = spawn(file, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+        const group=processGroup&&process.platform!=='win32';
+        const child = spawn(file, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'], ...(env?{env}:{}), detached:group });
+        function kill(sig){try{if(group&&child.pid)process.kill(-child.pid,sig);else child.kill(sig);}catch(e){if(e.code!=='ESRCH')throw e;}}
         let stdout = '', stderr = '', reason, killTimer;
         function stop(error) {
             if (reason) return;
             reason = error;
-            child.kill('SIGTERM');
-            killTimer = setTimeout(() => child.kill('SIGKILL'), 3000);
+            kill('SIGTERM');
+            killTimer = setTimeout(() => kill('SIGKILL'), 3000);
         }
         const timer = setTimeout(() => stop(new Error('Tiempo de procesamiento agotado')), timeout);
+        const abort=()=>stop(signal.reason instanceof Error?signal.reason:new Error('Proceso cancelado'));
+        if(signal?.aborted)abort();else signal?.addEventListener('abort',abort,{once:true});
+        function cleanup(){clearTimeout(timer);clearTimeout(killTimer);signal?.removeEventListener('abort',abort);}
         function collect(type, data) {
             if (reason) return;
             if (type === 'stdout') stdout += data;
@@ -28,11 +33,11 @@ export function run(file, args, { timeout = 90000, maxOutput = 1024 * 1024 } = {
         }
         child.stdout.on('data', d => collect('stdout', d));
         child.stderr.on('data', d => collect('stderr', d));
-        child.once('error', e => { clearTimeout(timer); clearTimeout(killTimer); reject(e); });
+        child.once('error', e => { cleanup(); reject(e); });
         child.once('close', code => {
-            clearTimeout(timer); clearTimeout(killTimer);
+            cleanup();
             if (reason) reject(reason);
-            else if (code !== 0) reject(new Error('Proceso fallido (' + code + ')'));
+            else if (code !== 0) {const error=new Error('Proceso fallido (' + code + ')');if(diagnostics)error.diagnostic=stderr.slice(-8192);reject(error);}
             else resolve({ stdout, stderr });
         });
     });

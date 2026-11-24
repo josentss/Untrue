@@ -18,6 +18,7 @@ jobs:
       - run: docker build -t untrue-ci .
       - run: docker run --rm --entrypoint node untrue-ci scripts/check-baileys.js
       - run: docker run --rm --entrypoint node untrue-ci scripts/check-stickers.js
+      - run: docker run --rm --entrypoint node untrue-ci scripts/check-music-downloads.js
       - name: Runtime dependency audit (report only)
         run: docker run --rm --entrypoint npm untrue-ci audit --omit=dev --json > npm-audit.json || true
       - uses: actions/upload-artifact@v4
