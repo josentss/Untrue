@@ -21,7 +21,7 @@ export function createProtocolLogger(target, { level = 'warn', interval = 60000,
             const time = now();
             const previous = buckets.get(key);
             if (previous && time - previous.at < interval) { previous.suppressed++; return; }
-            target[name]({ component:'baileys', category, ...(previous?.suppressed ? { suppressed:previous.suppressed } : {}) }, 'Evento de protocolo');
+            target[name]({ component:'baileys', protocolLevel:name, category, ...(previous?.suppressed ? { suppressed:previous.suppressed } : {}) }, 'Evento de protocolo');
             buckets.set(key, { at:time, suppressed:0 });
         };
     }
