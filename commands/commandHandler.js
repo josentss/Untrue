@@ -10,7 +10,7 @@ import { scCommand } from "./soundcloud.js";
 import { pinterestCommand } from "./pinterest.js";
 import { helpCommand } from "./help.js";
 import { mediaToStickerCommand } from "./mediaToSticker.js";
-import { youtubeCommand } from "./youtube.js";
+import { youtubeCommand, youtubeInfoCommand } from "./youtube.js";
 import { youtubeAudioCommand } from "./youtubeAudio.js";
 import { stickerToMediaCommand } from "./stickerToMedia.js";
 import { bcvCommand } from "./bcv.js";
@@ -22,7 +22,7 @@ import { toimgCommand } from "./toimg.js";
 import { traducirCommand } from "./traducir.js";
 import { recordCommandUsage } from "./stats.js";
 
-const commands = {
+const commands = Object.assign(Object.create(null), {
     ping: pingCommand,
     help: helpCommand,
     menu: helpCommand,
@@ -42,6 +42,7 @@ const commands = {
     ytvid: youtubeCommand,
     ytaud: youtubeAudioCommand,
     ytv: youtubeCommand,
+    ytinfo: youtubeInfoCommand,
     yta: youtubeAudioCommand,
     music: youtubeAudioCommand,
     sc: scCommand,
@@ -63,7 +64,7 @@ const commands = {
     tot: totextCommand,
     toimg: toimgCommand,
     toi: toimgCommand,
-};
+});
 
 async function handleInvalidCommand(sock, m, invalidCommandName) {
     await sock.sendMessage(m.key.remoteJid, {
@@ -75,8 +76,8 @@ export async function handleCommand(sock, m, commandName, args) {
     const userId = m.key.remoteJid;
     const excluded = ['ping', 'stats', 'help', 'menu', 'info'];
 
-    if (!excluded.includes(commandName)) {
-        recordCommandUsage(commandName, userId);
+    if (commands[commandName] && !excluded.includes(commandName)) {
+        recordCommandUsage(commandName, m.key.participant || userId);
     }
 
     if (commands[commandName]) {

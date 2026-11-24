@@ -32,10 +32,10 @@ class StatsManager {
 }
 
 const statsManager = new StatsManager();
-const CREATOR_ID = '30837949124772@lid';
+const CREATOR_ID = process.env.BOT_OWNER_JID;
 
 function isCreator(userId, participant = null) {
-    return (participant || userId) === CREATOR_ID;
+    return Boolean(CREATOR_ID && (participant || userId) === CREATOR_ID);
 }
 
 export async function statsCommand(sock, m, args) {

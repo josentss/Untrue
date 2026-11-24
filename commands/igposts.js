@@ -1,9 +1,8 @@
 import axios from 'axios';
-import https from 'https';
+import { platformUrl } from '../core/urls.js';
 
 class BK9InstagramService {
     constructor() {
-        this.httpsAgent = new https.Agent({ rejectUnauthorized: false });
         this.apis = [
             'https://api.bk9.dev/download/instagram',
             'https://api.bk9.dev/download/instagram2'
@@ -21,8 +20,7 @@ class BK9InstagramService {
             try {
                 const response = await axios.get(apiUrl, {
                     params: { url: cleanUrl },
-                    timeout: 20000,
-                    httpsAgent: this.httpsAgent
+                    timeout: 20000
                 });
 
                 if (response.data && response.data.status) {
@@ -53,8 +51,7 @@ class BK9InstagramService {
     async getBuffer(url) {
         const res = await axios.get(url, {
             responseType: 'arraybuffer',
-            httpsAgent: this.httpsAgent,
-            timeout: 15000
+            timeout: 15000, maxContentLength: 25 * 1024 * 1024
         });
         return Buffer.from(res.data);
     }
@@ -75,8 +72,8 @@ export async function igpostsCommand(sock, m, args) {
             url = args[0] || (m.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation);
         }
 
-        if (!url || !url.includes('instagram.com')) return;
-        if (url.includes('/reel/')) return;
+        url = platformUrl(url, ['instagram.com']);
+        if (url.includes('/reel/')) throw Error('Usa #reel');
 
         const mediaItems = await bk9.downloadPost(url);
 
