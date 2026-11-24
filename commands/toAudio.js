@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { unlinkSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { exec } from 'node:child_process';
 import { promisify } from 'util';
-import { downloadContentFromMessage } from '@whiskeysockets/baileys';
+import { downloadContentFromMessage } from 'baileys';
 
 const execPromise = promisify(exec);
 

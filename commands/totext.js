@@ -6,7 +6,7 @@ import { exec } from 'node:child_process';
 import { promisify } from 'util';
 import axios from 'axios';
 import Tesseract from 'tesseract.js';
-import { downloadContentFromMessage } from '@whiskeysockets/baileys';
+import { downloadContentFromMessage } from 'baileys';
 
 const execPromise = promisify(exec);
 

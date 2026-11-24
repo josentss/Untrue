@@ -1,3 +1,4 @@
+import { senderIdentity } from '../core/identity.js';
 import { pingCommand } from "./ping.js";
 import { statsCommand } from "./stats.js";
 import { tiktokCommand } from "./tiktok.js";
@@ -77,7 +78,7 @@ export async function handleCommand(sock, m, commandName, args) {
     const excluded = ['ping', 'stats', 'help', 'menu', 'info'];
 
     if (commands[commandName] && !excluded.includes(commandName)) {
-        recordCommandUsage(commandName, m.key.participant || userId);
+        recordCommandUsage(commandName, senderIdentity(m.key) || m.key.participant || userId);
     }
 
     if (commands[commandName]) {

@@ -1,4 +1,4 @@
-import { downloadContentFromMessage } from '@whiskeysockets/baileys';
+import { downloadContentFromMessage } from 'baileys';
 import fs from 'fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

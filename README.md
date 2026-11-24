@@ -18,3 +18,7 @@ Node 22, ffmpeg/ffprobe, yt-dlp, LibreOffice, Poppler e ImageMagick. npm ci --om
 ## Pruebas
 npm test (pruebas unitarias sin WhatsApp). npm run verify (sintaxis). GitHub Actions verifica el código y construye Docker.
 Las pruebas de proveedores externos, mensajes reales y stickers con sonido requieren una cuenta vinculada. El formato sonoro no está declarado en el protocolo StickerMessage de la versión bloqueada; no se promete soporte nativo.
+
+## Migración de Baileys 7 (candidata)
+Se fija baileys 7.0.0-rc14. El almacén usa los nombres y el codec de Baileys, conserva /data/sessions y permite nuevas categorías de claves (LID, device-list, tctoken, identity-key). Las escrituras son atómicas por archivo; se mantiene una sola instancia. No borra credenciales corruptas automáticamente. El formato interno de las sesiones debe verificarse con una reconexión real. Si hay regresiones, detener el bot antes de volver a la versión previa y, si no acepta la sesión migrada, vincular de nuevo. No ejecutar ambas versiones a la vez.
+Los logs del protocolo se sanitizan y agrupan con BAILEYS_LOG_LEVEL=warn; los mensajes directos de dependencias externas pueden quedar fuera del adaptador. BOT_OWNER_JID sigue siendo opcional y obligatorio para acceso a estadísticas, acepta un JID PN o LID que coincida con la identidad de transporte o alternativa de un mensaje recibido.

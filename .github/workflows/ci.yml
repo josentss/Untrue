@@ -16,4 +16,10 @@ jobs:
       - run: npm run verify
       - run: npm test
       - run: docker build -t untrue-ci .
-      - run: docker run --rm --entrypoint node untrue-ci --input-type=module -e "await import('./commands/commandHandler.js'); console.log('Comandos cargados')"
+      - run: docker run --rm --entrypoint node untrue-ci scripts/check-baileys.js
+      - name: Runtime dependency audit (report only)
+        run: docker run --rm --entrypoint npm untrue-ci audit --omit=dev --json > npm-audit.json || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit
+          path: npm-audit.json
