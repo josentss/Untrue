@@ -1,3 +1,4 @@
+import { withCommandFeedback } from '../core/commandFeedback.js';
 import { senderIdentity } from '../core/identity.js';
 import { pingCommand } from "./ping.js";
 import { statsCommand } from "./stats.js";
@@ -83,7 +84,9 @@ export async function handleCommand(sock, m, commandName, args) {
 
     if (commands[commandName]) {
         try {
-            await commands[commandName](sock, m, args);
+            const execute=()=>commands[commandName](sock,m,args);
+            if(excluded.includes(commandName))await execute();
+            else await withCommandFeedback(sock,m,execute);
         } catch (error) {
             console.error(`Error in ${commandName}:`, error.message);
             await sock.sendMessage(m.key.remoteJid, {

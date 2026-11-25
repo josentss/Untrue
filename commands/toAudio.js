@@ -18,6 +18,6 @@ export async function toAudioCommand(sock,m){
         });
     }catch(e){
         console.warn('Audio no procesado:',e instanceof MediaError?'validación':'conversión');
-        await sock.sendMessage(m.key.remoteJid,{text:e instanceof MediaError?e.message:'No se pudo extraer el audio.'},{quoted:m});
+        await sock.sendMessage(m.key.remoteJid,{text:e instanceof MediaError?e.message:'No se pudo extraer el audio.'},{quoted:m});return false;
     }
 }

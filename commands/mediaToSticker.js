@@ -46,6 +46,6 @@ export async function mediaToStickerCommand(sock,m){
         });
     } catch(e) {
         console.warn('Sticker no procesado '+JSON.stringify({stage,reason:e instanceof MediaError?'validation':'operation'}));
-        await sock.sendMessage(m.key.remoteJid,{text:e instanceof MediaError?e.message:({download:'No se pudo descargar el archivo original.',conversion:'No se pudo convertir el video o la imagen.',audio:'No se pudo preparar o subir el audio del sticker.',send:'No se pudo enviar el sticker a WhatsApp.'}[stage]||'No se pudo crear el sticker.')},{quoted:m});
+        await sock.sendMessage(m.key.remoteJid,{text:e instanceof MediaError?e.message:({download:'No se pudo descargar el archivo original.',conversion:'No se pudo convertir el video o la imagen.',audio:'No se pudo preparar o subir el audio del sticker.',send:'No se pudo enviar el sticker a WhatsApp.'}[stage]||'No se pudo crear el sticker.')},{quoted:m});return false;
     }
 }
