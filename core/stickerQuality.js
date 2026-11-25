@@ -1,12 +1,57 @@
-// Profiles intentionally avoid the former 0-quality / 48-pixel fallback.
+// Prefer smooth motion and usable visual detail. Never silently deliver 6–8 FPS
+// from a normal high-FPS source just to meet the sticker size ceiling.
 export function videoProfiles(duration,fpsSource){
+    const floor=Math.min(12,Math.max(1,Math.floor(fpsSource)));
     const profiles=duration>10
-        ? [[30,55,384],[30,40,320],[24,42,256],[18,40,224],[15,40,192],[12,35,144],[10,35,128],[8,35,112],[6,30,96],[6,30,80]]
+        ? [[30,60,384],[30,50,256],[24,48,224],[18,45,192],[15,45,160],[12,42,128]]
         : duration>5
-        ? [[30,58,512],[30,45,384],[24,45,320],[20,42,256],[15,40,192],[12,35,144],[10,35,112],[8,30,96],[6,30,80]]
-        : [[30,78,512],[30,60,384],[24,55,320],[20,48,256],[15,45,192],[12,40,144],[10,35,112],[8,30,96],[6,30,80]];
-    if(duration>10&&fpsSource<=15)profiles.unshift([15,58,320]);
-    return profiles;
+        ? [[30,65,512],[30,55,320],[24,50,256],[18,48,192],[15,45,160],[12,42,128]]
+        : [[30,80,512],[30,65,384],[24,60,256],[18,50,192],[15,45,160],[12,42,128]];
+    return profiles.map(([rate,q,size])=>[Math.min(Math.max(1,Math.floor(fpsSource)),Math.max(floor,rate)),q,size]);
+}
+export const SAMPLE_EDGE=64,SAMPLE_BYTES=SAMPLE_EDGE*SAMPLE_EDGE*4;
+// Reduce a decoded 512px composited frame into 64px RGBA using bounded
+// spatial averaging. Compare on a neutral background to handle transparency.
+export function frameSample(rgba){
+    if(rgba.length!==512*512*4)throw Error('Invalid decoded frame');
+    const out=Buffer.alloc(SAMPLE_BYTES);
+    for(let y=0;y<64;y++)for(let x=0;x<64;x++){
+        let r=0,g=0,b=0,a=0;
+        for(let dy=0;dy<8;dy+=2)for(let dx=0;dx<8;dx+=2){
+            const i=((y*8+dy)*512+x*8+dx)*4;
+            r+=rgba[i];g+=rgba[i+1];b+=rgba[i+2];a+=rgba[i+3];
+        }
+        const j=(y*64+x)*4;
+        out[j]=Math.round(r/16);out[j+1]=Math.round(g/16);out[j+2]=Math.round(b/16);out[j+3]=Math.round(a/16);
+    }
+    return out;
+}
+export function sampleError(actual,reference){
+    if(actual.length!==SAMPLE_BYTES||reference.length!==SAMPLE_BYTES)throw Error('Invalid frame sample');
+    let total=0,severe=0;const tiles=new Float64Array(64);
+    for(let p=0;p<4096;p++){
+        const i=p*4,a=actual[i+3]/255,b=reference[i+3]/255;
+        let err=0;
+        for(let c=0;c<3;c++)err+=Math.abs(actual[i+c]*a+127*(1-a)-reference[i+c]*b-127*(1-b));
+        err=Math.max(err/3,Math.abs(actual[i+3]-reference[i+3])/2);
+        total+=err;
+        if(err>70)severe++;
+        tiles[Math.floor(p/512)*8+Math.floor((p%64)/8)]+=err;
+    }
+    const badTiles=Array.from(tiles).filter(e=>e/64>55).length;
+    return {mean:total/4096,severe:severe/4096,badTiles};
+}
+export function acceptableSample(actual,reference){
+    const e=sampleError(actual,reference);
+    return e.mean<=25&&e.severe<=0.12&&e.badTiles<=3;
+}
+export function hdrConversion(video){
+    const transfer=video?.color_transfer;
+    if(!['smpte2084','arib-std-b67'].includes(transfer))return '';
+    // Explicit input/output tags avoid relying on swscale's defaults for PQ/HLG.
+    if(video.color_primaries!=='bt2020'||!['bt2020nc','bt2020c'].includes(video.color_space))throw Error('Unsupported HDR color metadata');
+    const range=video.color_range==='pc'?'full':'limited';
+    return 'zscale=pin=bt2020:min='+video.color_space+':tin='+transfer+':rin='+range+':t=linear:m=gbr:p=bt2020:npl=100,format=gbrpf32le,zscale=pin=bt2020:tin=linear:min=gbr:p=bt709,tonemap=tonemap=mobius:desat=2,zscale=pin=bt709:tin=linear:min=gbr:t=bt709:m=bt709:r=limited,format=yuv420p,';
 }
 function invalid(){throw Error('Invalid animated WebP structure');}
 function chunks(data,start,end){
