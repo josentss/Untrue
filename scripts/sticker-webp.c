@@ -9,13 +9,33 @@
 #define FRAME (EDGE*EDGE*4u)
 #define CAP (500u*1024u-1024u)
 static int integer(const char *s,int lo,int hi){char *e;long n=strtol(s,&e,10);return *s&&!*e&&n>=lo&&n<=hi?(int)n:-1;}
-static int encode(const uint8_t *rgba,int quality,WebPMemoryWriter *out){
+static int few_colors(const uint8_t *rgba){
+    uint32_t seen[32];int count=0;
+    for(int y=0;y<EDGE;y+=16)for(int x=0;x<EDGE;x+=16){
+        uint32_t value;memcpy(&value,rgba+(y*EDGE+x)*4,4);
+        int i=0;while(i<count&&seen[i]!=value)i++;
+        if(i==count){if(count==32)return 0;seen[count++]=value;}
+    }
+    return 1;
+}
+static int encode_mode(const uint8_t *rgba,int quality,int lossless,WebPMemoryWriter *out){
     WebPConfig cfg; WebPPicture pic;
     if(!WebPConfigPreset(&cfg,WEBP_PRESET_PICTURE,(float)quality)||!WebPPictureInit(&pic))return 0;
-    cfg.method=4;cfg.use_sharp_yuv=1;cfg.alpha_quality=100;cfg.thread_level=0;
+    if(lossless){if(!WebPConfigLosslessPreset(&cfg,3)){WebPPictureFree(&pic);return 0;}}
+    else {cfg.method=4;cfg.use_sharp_yuv=1;}
+    cfg.alpha_quality=100;cfg.thread_level=0;cfg.exact=1;
     pic.width=EDGE;pic.height=EDGE;pic.use_argb=1;pic.writer=WebPMemoryWrite;pic.custom_ptr=out;
     int ok=WebPValidateConfig(&cfg)&&WebPPictureImportRGBA(&pic,rgba,EDGE*4)&&WebPEncode(&cfg,&pic);
     WebPPictureFree(&pic);return ok;
+}
+static int encode(const uint8_t *rgba,int quality,WebPMemoryWriter *out){
+    if(!encode_mode(rgba,quality,0,out))return 0;
+    if(few_colors(rgba)){
+        WebPMemoryWriter exact;WebPMemoryWriterInit(&exact);
+        if(encode_mode(rgba,quality,1,&exact)&&exact.size<=out->size){WebPMemoryWriterClear(out);*out=exact;}
+        else WebPMemoryWriterClear(&exact);
+    }
+    return 1;
 }
 static int push(WebPMux *mux,const WebPMemoryWriter *w,int delay,size_t *used){
     if(delay<10)return 0;

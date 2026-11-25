@@ -172,7 +172,7 @@ export async function createSticker(input,dir,{kind,crop=true}={}) {
             catch { lastFailure='timeout'; break; }
             try {
                 const ok=await encodeIndependentVideo({
-                    args:[...baseArgs,'-xerror',...inputArgs,'-i',input,'-map','0:'+video.index,'-t',String(duration),'-an','-vf',videoFilter(size,fps,crop,alpha,video)+',format=rgba','-frames:v','450','-f','rawvideo','pipe:1'],
+                    args:[...baseArgs,'-xerror',...inputArgs,'-i',input,'-map','0:'+video.index,'-t',String(duration),'-an','-vf',videoFilter(size,fps,crop,alpha,video)+',format=rgba','-threads','1','-frames:v','450','-f','rawvideo','pipe:1'],
                     fps,quality,durationMs:Math.round(duration*1000),output:encoded,dir,timeout
                 });
                 if(!ok){lastFailure='size';console.info('Sticker perfil supera presupuesto '+JSON.stringify({fps,quality,detail:size}));continue;}

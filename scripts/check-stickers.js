@@ -151,6 +151,7 @@ await withTemp(async dir=>{
     const stationaryMeta=await sharp(stationarySticker.path,{animated:true}).metadata();
     assert.equal(stationaryMeta.pages,2);
     assert.deepEqual(stationaryMeta.delay,[1500,1500]);
+    assert.deepEqual(validateWebpTimeline(await readFile(stationarySticker.path),{independent:true}),{frames:2,durationMs:3000});
     assert.equal(stationaryMeta.width,512);assert.equal(stationaryMeta.pageHeight,512);
     assert.ok(stationaryMeta.exif.includes(Buffer.from('UntrueBot')));
     const stationaryClip=await prepareStickerAudio(stationary,await sub('stationary-audio'),stationarySticker.durationMs);
