@@ -5,7 +5,7 @@ import { mkdir,stat,readFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { withTemp,run } from '../core/process.js';
 import { ffmpeg } from '../core/config.js';
-import {createSticker,convertWebp,inspectMedia,extractAudio,LIMITS,stickerExif} from '../services/stickerEngine.js';
+import {createSticker,convertWebp,inspectMedia,extractAudio,LIMITS,stickerExif,legacyVideoCandidate} from '../services/stickerEngine.js';
 import {saveBoundedStream,downloadToFile} from '../services/mediaDownload.js';
 import {proto,generateWAMessageContent,generateWAMessageFromContent} from 'baileys';
 import {installSoundStickerCodec,soundCodecAvailable} from '../core/soundStickerCodec.js';
@@ -41,6 +41,18 @@ await withTemp(async dir=>{
     const am=await sharp(animated.path,{animated:true}).metadata();
     assert.ok(am.pages>1);assert.equal(am.width,512);assert.equal(am.pageHeight,512);
     assert.ok((await stat(animated.path)).size<=LIMITS.animatedBytes);
+    // Reproduce the pre-modernization encoder with a real HD source, using the
+    // old 1 MiB budget only in this isolated test. The ordinary engine remains capped.
+    const legacyInput=join(dir,'legacy-hd.mp4');
+    await run(ffmpeg,['-v','error','-f','lavfi','-i','testsrc2=size=1920x1080:rate=30','-t','4','-c:v','libx264','-preset','ultrafast','-threads','2','-pix_fmt','yuv420p','-y',legacyInput],{timeout:30000});
+    const legacyVideo=(await inspectMedia(legacyInput)).streams.find(s=>s.codec_type==='video');
+    const legacy=await legacyVideoCandidate(legacyInput,await sub('legacy-hd'),{video:legacyVideo,duration:4,fpsSource:30,baselineFps:18,end:Date.now()+30000,maxBytes:1024*1024});
+    assert.ok(legacy&&legacy.frames>=78&&legacy.fps>=19&&legacy.bytes<=1024*1024);
+    assert.ok(Math.abs(legacy.durationMs-4000)<=100);
+    assert.deepEqual(validateWebpTimeline(await readFile(legacy.path),{maxBytes:1024*1024}),{frames:legacy.frames,durationMs:legacy.durationMs});
+    const legacyRejected=await legacyVideoCandidate(legacyInput,await sub('legacy-budget'),{video:legacyVideo,duration:4,fpsSource:30,baselineFps:18,end:Date.now()+30000,maxBytes:100*1024});
+    assert.equal(legacyRejected,null);
+    assert.ok((await stat(animated.path)).size<=LIMITS.animatedBytes,'existing baseline must remain available');
     const converted=await convertWebp(animated.path,await sub('mp4'));
     const probe=await inspectMedia(converted.path);
     const v=probe.streams.find(s=>s.codec_type==='video');

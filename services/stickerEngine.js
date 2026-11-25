@@ -6,7 +6,7 @@ import { run } from '../core/process.js';
 import { ffmpeg,ffprobe } from '../core/config.js';
 import { MediaError } from '../core/mediaTarget.js';
 import { stationaryWebp } from '../core/stationaryWebp.js';
-import { videoProfiles,validateWebpTimeline } from '../core/stickerQuality.js';
+import { videoProfiles,validateWebpTimeline,legacyVideoBudget,legacyVideoProfile,legacyVideoFilter } from '../core/stickerQuality.js';
 
 export const LIMITS=Object.freeze({size:512,staticBytes:100*1024,animatedBytes:500*1024,durationMs:15000,frames:450,pixels:48*1024*1024,animationPixels:120*1024*1024});
 const transparent={r:0,g:0,b:0,alpha:0};
@@ -47,12 +47,12 @@ async function addExif(input,output) {
     mux.exif=stickerExif();
     await mux.save(output);
 }
-async function checkSticker(path,animated) {
+async function checkSticker(path,animated,maxBytes=animated?LIMITS.animatedBytes:LIMITS.staticBytes) {
     const meta=await metadata(path);
     const info=animationInfo(meta);
     if(meta.format!=='webp'||meta.width!==512||(meta.pageHeight||meta.height)!==512||info.animated!==animated) throw new MediaError('El resultado no es un sticker WebP válido.');
     const size=(await stat(path)).size;
-    return size>0&&size<=(animated?LIMITS.animatedBytes:LIMITS.staticBytes) ? {path,animated,durationMs:info.durationMs,frames:info.pages,fps:info.animated?Math.round(info.pages*100000/info.durationMs)/100:0,bytes:size} : null;
+    return size>0&&size<=maxBytes ? {path,animated,durationMs:info.durationMs,frames:info.pages,fps:info.animated?Math.round(info.pages*100000/info.durationMs)/100:0,bytes:size} : null;
 }
 export async function inspectMedia(path) {
     const {stdout}=await run(ffprobe,['-v','error',...inputArgs,'-show_format','-show_streams','-of','json',path],{timeout:15000,maxOutput:512*1024});
@@ -80,10 +80,10 @@ function videoFilter(size,fps,crop,alpha) {
         (crop?',crop='+size+':'+size:',pad='+size+':'+size+':(ow-iw)/2:(oh-ih)/2:color=black@0')+
         ',scale=512:512:flags=bicubic,setsar=1,format='+(alpha?'yuva420p':'yuv420p');
 }
-async function verifyAnimation(path,result,end){
+async function verifyAnimation(path,result,end,maxBytes=LIMITS.animatedBytes){
     // The final file (with EXIF) must have a valid full first canvas,
     // bounded rectangles, and exactly the same timeline reported by libvips.
-    const timeline=validateWebpTimeline(await readFile(path));
+    const timeline=validateWebpTimeline(await readFile(path),{maxBytes});
     if(timeline.frames!==result.frames||timeline.durationMs!==result.durationMs)throw new MediaError('La animación contiene una línea de tiempo inválida.');
     // Sample actual composited pixels, not just metadata. Keep memory bounded.
     for(const index of new Set([0,Math.floor(result.frames/2),result.frames-1])){
@@ -91,6 +91,38 @@ async function verifyAnimation(path,result,end){
         const {data,info}=await sharp(path,{...sharpOptions,page:index,pages:1}).ensureAlpha().raw().toBuffer({resolveWithObject:true});
         if(info.width!==512||info.height!==512||info.channels!==4||data.length!==512*512*4)throw new MediaError('Fotograma WebP no compatible.');
     }
+}
+// Only attempt the historical encoder after a valid baseline is already
+// available. It uses distinct paths; failure never destroys that baseline.
+// The old full-resolution filter and libwebp encoder are recovered, while
+// retaining measured duration, stream selection, bounded process and EXIF.
+export async function legacyVideoCandidate(input,dir,{video,duration,fpsSource,baselineFps,end,maxBytes=legacyVideoBudget()}){
+    const {fps,quality}=legacyVideoProfile(duration,fpsSource,baselineFps);
+    const encoded=join(dir,'legacy-encoded.webp'),output=join(dir,'legacy-sticker.webp');
+    const budget=Math.min(maxBytes,1024*1024);
+    await run(ffmpeg,[...baseArgs,'-xerror',...inputArgs,'-i',input,'-map','0:'+video.index,'-t',String(duration),
+        '-vcodec','libwebp','-vf',legacyVideoFilter(fps),'-loop','0','-lossless','0','-compression_level','4',
+        '-q:v',String(quality),'-preset','default','-an','-vsync','0',encoded],{timeout:Math.min(12000,remaining(end)),processGroup:true});
+    if((await stat(encoded)).size>budget)return null;
+    await addExif(encoded,output);
+    const result=await checkSticker(output,true,budget);
+    if(!result||Math.abs(result.durationMs-duration*1000)>Math.max(100,2000/fps)||result.fps+.15<baselineFps)return null;
+    await verifyAnimation(output,result,end,budget);
+    return result;
+}
+async function preferLegacy(input,dir,baseline,{video,duration,fpsSource,crop,alpha,quality,size,end}){
+    // Keep fast, sharp primary results and alpha/padding behaviour unchanged.
+    if(!crop||alpha||(size>=384&&quality>=50)||end-Date.now()<3000)return baseline;
+    try{
+        const candidate=await legacyVideoCandidate(input,dir,{video,duration,fpsSource,baselineFps:baseline.fps,end:Math.min(end,Date.now()+12000)});
+        if(candidate){
+            console.info('Sticker perfil histórico seleccionado '+JSON.stringify({fps:candidate.fps,quality:50,detail:512,bytes:candidate.bytes}));
+            return candidate;
+        }
+    }catch{
+        console.info('Sticker perfil histórico no compatible; se conserva el resultado anterior');
+    }
+    return baseline;
 }
 export async function createSticker(input,dir,{kind,crop=true}={}) {
     const end=deadline();
@@ -169,7 +201,7 @@ export async function createSticker(input,dir,{kind,crop=true}={}) {
                 if(bytes>LIMITS.animatedBytes){lastFailure='size';continue;}
                 await addExif(encoded,output);
                 const result=await checkSticker(output,true);
-                if(result){ await verifyAnimation(output,result,end); console.info('Sticker perfil seleccionado '+JSON.stringify({fps:result.fps,quality,detail:size,bytes:result.bytes})); return result; }
+                if(result){ await verifyAnimation(output,result,end); console.info('Sticker perfil seleccionado '+JSON.stringify({fps:result.fps,quality,detail:size,bytes:result.bytes})); return await preferLegacy(input,dir,result,{video,duration,fpsSource,crop,alpha,quality,size,end}); }
                 lastFailure='size';
             } catch(error) {
                 // Only bounded categories, never stderr, local paths or user data.
