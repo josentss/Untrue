@@ -27,9 +27,10 @@ export async function statusCommand(sock,m,args=[]){
             await downloadToFile(target,input,{limit});
             const file=await prepareHD(input,target.kind,dir,{status:true,limit});
             attempted=true;
-            await sock.sendMessage('status@broadcast',mediaContent(file),{statusJidList:audience});
+            const sent=await sock.sendMessage('status@broadcast',mediaContent(file),{statusJidList:audience});
+            if(!sent?.key?.id)throw new Error('Estado no confirmado');
         });
-        await sock.sendMessage(m.key.remoteJid,{text:'Estado enviado a la audiencia configurada.'},{quoted:m});
+        await sock.sendMessage(m.key.remoteJid,{text:'Estado enviado. Comprueba su visibilidad en WhatsApp.'},{quoted:m});
     }catch(e){
         console.warn('Estado: operación no confirmada',{reason:attempted?'send':'validation_or_processing'});
         await sock.sendMessage(m.key.remoteJid,{text:attempted?'No se pudo confirmar el estado. Revisa WhatsApp antes de volver a publicarlo.':errorText(e)},{quoted:m});return false;

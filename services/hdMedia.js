@@ -23,7 +23,7 @@ async function inspect(path,dir,runner){
     if(!video||!Number.isSafeInteger(video.width)||!Number.isSafeInteger(video.height)||video.width<1||video.height<1||video.width*video.height>3840*2160||!Number.isFinite(seconds)||seconds<=0||!Number.isFinite(fps)||fps<=0||fps>120)throw formatError();
     const rotation=Number(video.side_data_list?.find(x=>typeof x.rotation!=='undefined')?.rotation??video.tags?.rotate??0);
     if(!Number.isFinite(rotation)||rotation%90!==0)throw formatError();
-    return {video,audio,seconds,fps,rotation,mp4:String(data.format?.format_name).split(',').includes('mp4'),streams};
+    return {video,audio,seconds,fps,rotation,mp4:String(data.format?.format_name).split(',').includes('mp4'),majorBrand:String(data.format?.tags?.major_brand||'').trim().toLowerCase(),streams};
 }
 export async function prepareHD(input,kind,dir,{mode='native',status=false,limit=100*1024*1024,runner=run}={}){
     if(!['native','original'].includes(mode)||status&&mode==='original')throw formatError();
@@ -31,7 +31,7 @@ export async function prepareHD(input,kind,dir,{mode='native',status=false,limit
     if(kind==='image'){
         const image=sharp(input,{limitInputPixels:HD_LIMITS.imagePixels,failOn:'error'});
         const meta=await image.metadata();
-        const type=imageTypes[meta.format];
+        const type=imageTypes[meta.format==='heif'&&meta.compression==='av1'?'avif':meta.format];
         if(!type||!meta.width||!meta.height||(meta.pages||1)!==1)throw formatError();
         if(mode==='original'){
             // No resize or re-encode, but decode once to reject malformed images.
@@ -51,7 +51,7 @@ export async function prepareHD(input,kind,dir,{mode='native',status=false,limit
     if(kind!=='video')throw formatError();
     const data=await inspect(input,dir,runner);
     if(mode==='original'){
-        if(!data.mp4||data.seconds>1800)throw new HDMediaError('El modo archivo admite videos MP4 de hasta 30 minutos.');
+        if(!data.mp4||!/^(?:isom|iso[2-9]|mp4[12]|avc1|dash|m4v|msnv)$/.test(data.majorBrand)||data.seconds>1800)throw new HDMediaError('El modo archivo admite videos MP4 de hasta 30 minutos.');
         return result(input,'document','video/mp4','mp4');
     }
     const limits=videoLimits(status),cap=Math.min(limit,limits.bytes);
@@ -65,9 +65,12 @@ export async function prepareHD(input,kind,dir,{mode='native',status=false,limit
     const filters=scale+(data.fps>limits.fps?',fps='+limits.fps:'');
     const args=['-v','error','-xerror','-nostdin','-protocol_whitelist','file,pipe','-i',input,'-map','0:'+v.index,'-map','0:a:0?','-map_metadata','-1','-map_chapters','-1',...(compatible?['-c:v','copy']:['-vf',filters,'-c:v','libx264','-preset','veryfast','-crf','19','-threads','2']),'-c:a',a?.codec_name==='aac'?'copy':'aac','-movflags','+faststart','-fs',String(cap),'-y',out];
     await runner(ffmpeg,args,{timeout:60000,maxOutput:256*1024,env:childEnv(dir),processGroup:true});
-    await bytes(out,cap);
+    const outputBytes=await bytes(out,cap);
+    if(outputBytes>=cap-65536)throw new HDMediaError('El video alcanzó el límite de tamaño. Usa un archivo más corto.');
     const checked=await inspect(out,dir,runner);
     if(!checked.mp4||checked.video.codec_name!=='h264'||checked.video.pix_fmt!=='yuv420p'||!validVideoDimensions(checked.video.width,checked.video.height,limits)||checked.fps>limits.fps+.05||Boolean(checked.audio)!==Boolean(a)||(a&&checked.audio.codec_name!=='aac')||Math.abs(checked.seconds-data.seconds)>Math.max(.25,Math.min(.5,data.seconds*.02)))throw new HDMediaError('No se pudo conservar el video completo dentro de los límites.');
+    // Validate that the video and its optional audio can be decoded in full.
+    await runner(ffmpeg,['-v','error','-xerror','-nostdin','-protocol_whitelist','file,pipe','-threads','2','-i',out,'-map','0:v:0','-map','0:a:0?','-f','null','-'],{timeout:45000,maxOutput:256*1024,env:childEnv(dir),processGroup:true});
     return result(out,'video','video/mp4','mp4',{width:checked.video.width,height:checked.video.height,seconds:Math.ceil(checked.seconds)});
 }
 export function mediaContent(file){

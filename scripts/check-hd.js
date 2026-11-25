@@ -15,12 +15,14 @@ await withTemp(async dir=>{
     const status=await prepareHD(jpg,'image',dir,{status:true});assert.equal(status.width,1280);
     const video=join(dir,'source.mp4');
     await run(ffmpeg,['-v','error','-f','lavfi','-i','testsrc2=size=640x480:rate=24','-f','lavfi','-i','sine=frequency=440','-t','2','-c:v','libx264','-pix_fmt','yuv420p','-threads','2','-c:a','aac','-y',video]);
-    const originalVideo=await prepareHD(video,'video',dir,{mode:'original'});assert.equal(originalVideo.path,video);
+    const originalVideo=await prepareHD(video,'video',dir,{mode:'original'});assert.equal(originalVideo.path,video);assert.deepEqual(await readFile(originalVideo.path),await readFile(video));
     const native=await prepareHD(video,'video',dir);assert.equal(native.width,640);assert.equal(native.height,480);assert.equal(native.seconds,2);
     const buf=await readFile(native.path);assert.ok(buf.indexOf('moov')>=0&&buf.indexOf('moov')<buf.indexOf('mdat'));
     const portrait=join(dir,'portrait.mp4');
     await run(ffmpeg,['-v','error','-f','lavfi','-i','testsrc2=size=960x1600:rate=30','-t','1','-c:v','libx264','-pix_fmt','yuv420p','-threads','2','-y',portrait]);
     const converted=await prepareHD(portrait,'video',dir,{status:true});
     assert.ok(converted.width<=720&&converted.height<=1280);assert.ok(converted.height>converted.width);
+    await assert.rejects(prepareHD(jpg,'image',dir,{status:true,mode:'original'}));
+    await assert.rejects(prepareHD(video,'video',dir,{limit:100}));
     console.log('HD images, original bytes, native MP4, faststart and portrait status video verified');
 });
