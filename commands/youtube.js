@@ -1,5 +1,5 @@
 import { musicCommand,musicQuery } from './musicDownload.js';
-import { getYoutubeInfo } from '../services/youtubeDownloader.js';
+import { getYoutubeInfo } from '../services/musicDownloader.js';
 import { publicError } from '../core/downloadPolicy.js';
 export const youtubeCommand=(sock,m,args)=>musicCommand(sock,m,args,{platform:'youtube',kind:'video',command:'ytv'});
 export async function youtubeInfoCommand(sock,m,args){

@@ -5,7 +5,7 @@ ARG GALLERYDL_VERSION=1.32.21
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git ca-certificates curl python3 python3-venv build-essential pkg-config \
     libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev \
-    ffmpeg libreoffice-core libreoffice-writer libreoffice-calc imagemagick poppler-utils fonts-dejavu-core tesseract-ocr tesseract-ocr-spa tesseract-ocr-eng \
+    ffmpeg libreoffice-core libreoffice-writer libreoffice-calc poppler-utils fonts-dejavu-core tesseract-ocr tesseract-ocr-spa tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv /opt/yt-dlp \
     && if [ -n "$YTDLP_VERSION" ]; then /opt/yt-dlp/bin/pip install --no-cache-dir "yt-dlp[default]==$YTDLP_VERSION"; else /opt/yt-dlp/bin/pip install --no-cache-dir "yt-dlp[default]"; fi \

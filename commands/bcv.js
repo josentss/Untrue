@@ -1,9 +1,5 @@
-import {readFileSync} from 'node:fs';
 import {utilityJson} from '../services/utilityHttp.js';
-import {historicalRate,parseOfficialRates,formatBcv} from '../core/utilityPolicy.js';
-const history=()=>{try{return historicalRate(JSON.parse(readFileSync(new URL('../services/bcvTasas.json',import.meta.url),'utf8')));}catch{return null;}};
-export function getBCVPrice(){return history()?.usd.toFixed(4)||'N/D';}
-export const getBCVFromHistorial=getBCVPrice;
+import {parseOfficialRates,formatBcv} from '../core/utilityPolicy.js';
 let cached,pending;
 export async function exchangeReference({fetcher=fetch,now=Date.now()}={}){
     if(cached&&now-cached.at<15*60000)return cached.value;
