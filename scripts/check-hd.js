@@ -1,0 +1,26 @@
+import assert from 'node:assert/strict';
+import {join} from 'node:path';
+import {readFile} from 'node:fs/promises';
+import {withTemp,run} from '../core/process.js';
+import {ffmpeg} from '../core/config.js';
+import {prepareHD,mediaContent} from '../services/hdMedia.js';
+import sharp from 'sharp';
+await withTemp(async dir=>{
+    const jpg=join(dir,'original.jpg');
+    await sharp({create:{width:1800,height:1200,channels:3,background:'red'}}).jpeg().toFile(jpg);
+    const img=await prepareHD(jpg,'image',dir);assert.equal(img.path,jpg);assert.equal(img.width,1800);
+    const original=await prepareHD(jpg,'image',dir,{mode:'original'});assert.equal(original.kind,'document');
+    assert.deepEqual(await readFile(original.path),await readFile(jpg));
+    assert.equal(mediaContent(original).mimetype,'image/jpeg');
+    const status=await prepareHD(jpg,'image',dir,{status:true});assert.equal(status.width,1280);
+    const video=join(dir,'source.mp4');
+    await run(ffmpeg,['-v','error','-f','lavfi','-i','testsrc2=size=640x480:rate=24','-f','lavfi','-i','sine=frequency=440','-t','2','-c:v','libx264','-pix_fmt','yuv420p','-threads','2','-c:a','aac','-y',video]);
+    const originalVideo=await prepareHD(video,'video',dir,{mode:'original'});assert.equal(originalVideo.path,video);
+    const native=await prepareHD(video,'video',dir);assert.equal(native.width,640);assert.equal(native.height,480);assert.equal(native.seconds,2);
+    const buf=await readFile(native.path);assert.ok(buf.indexOf('moov')>=0&&buf.indexOf('moov')<buf.indexOf('mdat'));
+    const portrait=join(dir,'portrait.mp4');
+    await run(ffmpeg,['-v','error','-f','lavfi','-i','testsrc2=size=960x1600:rate=30','-t','1','-c:v','libx264','-pix_fmt','yuv420p','-threads','2','-y',portrait]);
+    const converted=await prepareHD(portrait,'video',dir,{status:true});
+    assert.ok(converted.width<=720&&converted.height<=1280);assert.ok(converted.height>converted.width);
+    console.log('HD images, original bytes, native MP4, faststart and portrait status video verified');
+});

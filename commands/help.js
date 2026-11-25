@@ -31,6 +31,7 @@ export async function helpCommand(sock, m) {
 • #toa — Extraer audio de video/audio
 • #tot — OCR local o transcripción de audio/video (10 min)
 • #toi [página] — PDF, Word o Excel a imagen (hasta 20 páginas)
+• #hd [archivo] — Multimedia de alta calidad / archivo original${process.env.ENABLE_STATUS_POSTING==='true'?'\n• #estado publicar — Adjuntar imagen/video (solo propietario)':''}
 
 *Info*
 • #ping — Latencia

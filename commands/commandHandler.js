@@ -22,6 +22,7 @@ import { toAudioCommand } from "./toAudio.js";
 import { totextCommand } from "./totext.js";
 import { toimgCommand } from "./toimg.js";
 import { traducirCommand } from "./traducir.js";
+import { hdCommand,statusCommand } from './hd.js';
 import { recordCommandUsage } from "./stats.js";
 
 const commands = Object.assign(Object.create(null), {
@@ -66,6 +67,8 @@ const commands = Object.assign(Object.create(null), {
     tot: totextCommand,
     toimg: toimgCommand,
     toi: toimgCommand,
+    hd: hdCommand,
+    estado: statusCommand,
 });
 
 async function handleInvalidCommand(sock, m, invalidCommandName) {
