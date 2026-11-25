@@ -1,4 +1,3 @@
-import { isOwner,userJid } from '../core/identity.js';
 import { readFileSync, existsSync } from 'fs';
 
 const BANNER_IMAGE_PATH = './assets/untrue_banner.jpg';
@@ -32,7 +31,6 @@ export async function helpCommand(sock, m) {
 • #toa — Extraer audio de video/audio
 • #tot — OCR local o transcripción de audio/video (10 min)
 • #toi [página] — PDF, Word o Excel a imagen (hasta 20 páginas)
-• #hd [archivo] — Multimedia de alta calidad / archivo original${process.env.ENABLE_STATUS_POSTING==='true'&&userJid(m.key.remoteJid)&&isOwner(m.key,process.env.BOT_OWNER_JID)?'\n• #estado publicar — Adjuntar imagen/video (solo propietario)':''}
 
 *Info*
 • #ping — Latencia

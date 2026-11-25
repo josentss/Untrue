@@ -21,7 +21,6 @@ jobs:
       - run: docker run --rm --entrypoint node untrue-ci scripts/check-music-downloads.js
       - run: docker run --rm --entrypoint node untrue-ci scripts/check-social-downloads.js
       - run: docker run --rm --entrypoint node untrue-ci scripts/check-utilities.js
-      - run: docker run --rm --entrypoint node untrue-ci scripts/check-hd.js
       - name: Runtime dependency audit (report only)
         run: docker run --rm --entrypoint npm untrue-ci audit --omit=dev --json > npm-audit.json || true
       - uses: actions/upload-artifact@v4
