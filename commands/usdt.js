@@ -1,5 +1,5 @@
 import {utilityJson} from '../services/utilityHttp.js';
-import {parseBinanceRate,rateDate,formatUsdt} from '../core/utilityPolicy.js';
+import {parseBinanceRate,formatUsdt} from '../core/utilityPolicy.js';
 let cached,pending;
 async function quote({fetcher=fetch,now=Date.now()}={}){
     if(cached&&now-cached.at<60000)return cached.value;
@@ -7,8 +7,6 @@ async function quote({fetcher=fetch,now=Date.now()}={}){
     pending=(async()=>{const value=parseBinanceRate(await utilityJson('https://criptoya.com/api/binancep2p/usdt/ves',{fetcher}),now);cached={at:now,value};return value;})();
     try{return await pending;}finally{pending=undefined;}
 }
-const format=n=>n.toFixed(4)+' Bs';
-export async function getUSDTPrice(){try{const r=await quote();return {avgPrice:format(r.avg),date:rateDate(r.newest)};}catch{return {avgPrice:'N/D',date:'N/D'};}}
 export async function usdtCommand(sock,m){
     let text,success=true;
     try{text=formatUsdt(await quote());}

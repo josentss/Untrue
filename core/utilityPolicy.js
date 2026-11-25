@@ -22,22 +22,6 @@ export function textChunks(value,limit=3500){
 }
 export function positiveRate(v){return (typeof v==='number'||typeof v==='string'&&v.trim()!=='')&&Number.isFinite(Number(v))&&Number(v)>0?Number(v):null;}
 export function rateDate(ms){return new Intl.DateTimeFormat('es-VE',{timeZone:'America/Caracas',day:'2-digit',month:'2-digit',year:'numeric'}).format(ms);}
-export function historicalRate(data){
-    return Object.entries(data||{}).flatMap(([key,row])=>{
-        if(!/^\d{8}$/.test(key))return [];
-        const d=Number(key.slice(0,2)),m=Number(key.slice(2,4)),y=Number(key.slice(4)),ts=Date.UTC(y,m-1,d),date=new Date(ts);
-        if(date.getUTCDate()!==d||date.getUTCMonth()!==m-1||date.getUTCFullYear()!==y)return [];
-        const parse=v=>positiveRate(typeof v==='string'?v.replace(/\s*Bs\s*$/i,'').replace(',','.'):v);
-        const usd=parse(row?.usdPrice),eur=parse(row?.eurPrice);
-        return usd&&eur?[{usd,eur,date:key.slice(0,2)+'/'+key.slice(2,4)+'/'+key.slice(4),ts}]:[];
-    }).sort((a,b)=>b.ts-a.ts)[0]||null;
-}
-export function parseExchangeRates(data,now=Date.now()){
-    const usd=positiveRate(data?.conversion_rates?.VES??data?.rates?.VES),perEur=positiveRate(data?.conversion_rates?.EUR??data?.rates?.EUR);
-    const timestamp=Number(data?.time_last_update_unix)*1000;
-    if(data?.result!=='success'||data.base_code!=='USD'||!usd||!perEur||!Number.isFinite(timestamp)||timestamp<=0||timestamp>now+300000||now-timestamp>7*86400000)throw new UtilityError('Tasa de referencia no disponible.');
-    return {usd,eur:usd/perEur,timestamp};
-}
 export function parseUsdt(data,now=Date.now()){
     const rows=Object.values(data||{}).flatMap(row=>{
         const ask=positiveRate(row?.ask),bid=positiveRate(row?.bid),ts=Number(row?.time)*1000;
