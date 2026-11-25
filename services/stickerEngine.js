@@ -1,11 +1,12 @@
 import sharp from 'sharp';
 import WebP from 'node-webpmux';
 import { join } from 'node:path';
-import { stat,writeFile } from 'node:fs/promises';
+import { stat,writeFile,readFile } from 'node:fs/promises';
 import { run } from '../core/process.js';
 import { ffmpeg,ffprobe } from '../core/config.js';
 import { MediaError } from '../core/mediaTarget.js';
 import { stationaryWebp } from '../core/stationaryWebp.js';
+import { videoProfiles,validateWebpTimeline } from '../core/stickerQuality.js';
 
 export const LIMITS=Object.freeze({size:512,staticBytes:100*1024,animatedBytes:500*1024,durationMs:15000,frames:450,pixels:48*1024*1024,animationPixels:120*1024*1024});
 const transparent={r:0,g:0,b:0,alpha:0};
@@ -74,10 +75,22 @@ function sourceFps(info) {
     }
     return 24;
 }
-function videoFilter(size,fps,crop,alpha,clean=false) {
-    return 'fps='+fps+(alpha?',format=rgba':'')+',scale='+size+':'+size+':force_original_aspect_ratio='+(crop?'increase':'decrease')+(clean?':flags=bicubic':'')+
+function videoFilter(size,fps,crop,alpha) {
+    return 'fps='+fps+(alpha?',format=rgba':'')+',scale='+size+':'+size+':force_original_aspect_ratio='+(crop?'increase':'decrease')+':flags=bicubic'+
         (crop?',crop='+size+':'+size:',pad='+size+':'+size+':(ow-iw)/2:(oh-ih)/2:color=black@0')+
-        ',scale=512:512:flags='+(clean?'bicubic':'bilinear')+',setsar=1,format='+(alpha?'yuva420p':'yuv420p');
+        ',scale=512:512:flags=bicubic,setsar=1,format='+(alpha?'yuva420p':'yuv420p');
+}
+async function verifyAnimation(path,result,end){
+    // The final file (with EXIF) must have a valid full first canvas,
+    // bounded rectangles, and exactly the same timeline reported by libvips.
+    const timeline=validateWebpTimeline(await readFile(path));
+    if(timeline.frames!==result.frames||timeline.durationMs!==result.durationMs)throw new MediaError('La animación contiene una línea de tiempo inválida.');
+    // Sample actual composited pixels, not just metadata. Keep memory bounded.
+    for(const index of new Set([0,Math.floor(result.frames/2),result.frames-1])){
+        remaining(end);
+        const {data,info}=await sharp(path,{...sharpOptions,page:index,pages:1}).ensureAlpha().raw().toBuffer({resolveWithObject:true});
+        if(info.width!==512||info.height!==512||info.channels!==4||data.length!==512*512*4)throw new MediaError('Fotograma WebP no compatible.');
+    }
 }
 export async function createSticker(input,dir,{kind,crop=true}={}) {
     const end=deadline();
@@ -115,27 +128,22 @@ export async function createSticker(input,dir,{kind,crop=true}={}) {
         const fpsSource=sourceFps(info);
         const video=info.streams.find(s=>s.codec_type==='video'&&!s.disposition?.attached_pic);
         const alpha=!crop||/^(?:rgba|bgra|argb|abgr|yuva|gbrap|ya|pal8)/.test(video.pix_fmt||'');
-        // Choose a stronger initial compression for long clips; preserve motion
-        // whenever possible, then reduce spatial detail and finally FPS.
-        const profiles=duration>10
-            ? [[30,35,384],[24,28,320],[20,18,224],[15,12,160],[12,8,112],[10,5,80],[8,0,64],[6,0,48]]
-            : [[30,duration>5?35:65,512],[30,duration>5?18:35,320],[24,18,256],[18,12,192],[15,8,144],[12,5,96],[10,0,64],[8,0,48],[6,0,48]];
-        // For long, low-FPS sources, try a less aggressive quantizer and smooth scaling first.
-        // Keep every proven PR #10 profile unchanged as a fallback.
-        if(duration>10&&fpsSource<=15) profiles.unshift([30,45,320,true]);
+        // Keep a minimum quantizer and spatial-detail floor. Try reducing temporal
+        // sampling before extreme loss of spatial quality. No 0-quality profiles.
+        const profiles=videoProfiles(duration,fpsSource);
         const attempted=new Set();
         let smallest=Infinity, lastFailure='size';
-        for(const [cap,quality,size,clean=false] of profiles){
+        for(const [cap,quality,size] of profiles){
             // Integer rates keep exact 15-second sources within the duration limit.
             const fps=Math.min(Math.max(1,Math.floor(fpsSource)),cap);
-            const key=[fps,quality,size,clean].join(':');
+            const key=[fps,quality,size].join(':');
             if(attempted.has(key)) continue;
             attempted.add(key);
             let timeout;
-            try { timeout=clean?Math.min(8000,remaining(end)):remaining(end); }
+            try { timeout=remaining(end); }
             catch { lastFailure='timeout'; break; }
             try {
-                await run(ffmpeg,[...baseArgs,...inputArgs,'-i',input,'-map','0:'+video.index,'-t',String(duration),'-an','-vf',videoFilter(size,fps,crop,alpha,clean),'-c:v','libwebp_anim','-quality',String(quality),'-compression_level','3','-loop','0','-threads','2',encoded],{timeout});
+                await run(ffmpeg,[...baseArgs,'-xerror',...inputArgs,'-i',input,'-map','0:'+video.index,'-t',String(duration),'-an','-vf',videoFilter(size,fps,crop,alpha),'-c:v','libwebp_anim','-quality',String(quality),'-cr_threshold','0','-compression_level','4','-loop','0','-threads','2',encoded],{timeout});
                 const bytes=(await stat(encoded)).size;
                 smallest=Math.min(smallest,bytes);
                 const meta=await metadata(encoded);
@@ -150,18 +158,18 @@ export async function createSticker(input,dir,{kind,crop=true}={}) {
                     await writeFile(output,animation);
                     console.info('Sticker video estacionario '+JSON.stringify({durationMs:total,bytes:animation.length}));
                     const result=await checkSticker(output,true);
-                    if(result) return result;
+                    if(result){await verifyAnimation(output,result,end);return result;}
                     lastFailure='size';continue;
                 }
                 const visual=animationInfo(meta,{candidate:true});
                 // A failed candidate must never prevent trying a smaller profile.
                 const validDuration=animated&&visual.durationMs<=LIMITS.durationMs&&Math.abs(visual.durationMs-duration*1000)<=Math.max(100,2000/fps);
-                console.info('Sticker perfil '+JSON.stringify({fps,quality,detail:size,clean,bytes,durationMs:visual.durationMs,frames:visual.pages}));
+                console.info('Sticker perfil '+JSON.stringify({fps,quality,detail:size,bytes,durationMs:visual.durationMs,frames:visual.pages}));
                 if(!validDuration){lastFailure='duration';continue;}
                 if(bytes>LIMITS.animatedBytes){lastFailure='size';continue;}
                 await addExif(encoded,output);
                 const result=await checkSticker(output,true);
-                if(result){ console.info('Sticker perfil seleccionado '+JSON.stringify({fps:result.fps,quality,detail:size,clean,bytes:result.bytes})); return result; }
+                if(result){ await verifyAnimation(output,result,end); console.info('Sticker perfil seleccionado '+JSON.stringify({fps:result.fps,quality,detail:size,bytes:result.bytes})); return result; }
                 lastFailure='size';
             } catch(error) {
                 // Only bounded categories, never stderr, local paths or user data.
@@ -170,7 +178,7 @@ export async function createSticker(input,dir,{kind,crop=true}={}) {
             }
         }
         console.warn('Sticker compresión agotada '+JSON.stringify({reason:lastFailure,attempts:attempted.size,smallestBytes:Number.isFinite(smallest)?smallest:null}));
-        throw new MediaError(lastFailure==='timeout'?'Se agotó el tiempo de compresión del sticker. Intenta con un video de menor resolución.':lastFailure==='size'?'El video tiene demasiado detalle para el límite de 500 KB del sticker. Prueba con un video más sencillo.':'No se pudo convertir el video en una animación compatible. Intenta con otro video.');
+        throw new MediaError(lastFailure==='timeout'?'Se agotó el tiempo de compresión del sticker. Intenta con un video de menor resolución.':lastFailure==='size'?'El video tiene demasiado detalle para el límite de 500 KB del sticker sin perder demasiada calidad. Prueba con un clip más corto o sencillo.':'No se pudo convertir el video en una animación compatible. Intenta con otro video.');
     } else throw new MediaError('Solo imágenes, GIF, videos o stickers WebP.');
     throw new MediaError('No se pudo comprimir el sticker dentro del límite de WhatsApp.');
 }
