@@ -19,8 +19,8 @@ function chunks(data,start,end){
     }
     if(start!==end)invalid();return list;
 }
-export function validateWebpTimeline(data){
-    if(!Buffer.isBuffer(data)||data.length<12||data.length>500*1024||data.toString('ascii',0,4)!=='RIFF'||data.toString('ascii',8,12)!=='WEBP'||data.readUInt32LE(4)+8!==data.length)invalid();
+export function validateWebpTimeline(data,{maxBytes=500*1024}={}){
+    if(!Buffer.isBuffer(data)||data.length<12||data.length>Math.min(maxBytes,1024*1024)||data.toString('ascii',0,4)!=='RIFF'||data.toString('ascii',8,12)!=='WEBP'||data.readUInt32LE(4)+8!==data.length)invalid();
     const top=chunks(data,12,data.length);
     const extended=top[0],animation=top.filter(c=>c.type==='ANIM');
     if(extended?.type!=='VP8X'||extended.size!==10||!(data[extended.offset]&2)||data.readUIntLE(extended.offset+4,3)!==511||data.readUIntLE(extended.offset+7,3)!==511||animation.length!==1||animation[0].size!==6)invalid();
@@ -37,4 +37,17 @@ export function validateWebpTimeline(data){
     }
     if(durationMs>15000)invalid();
     return {frames:frames.length,durationMs};
+}
+
+// The historical bot allowed up to 1 MiB for animated videos. Larger native
+// messages are an explicit compatibility experiment, not the default pack limit.
+export function legacyVideoBudget(value=process.env.STICKER_LEGACY_MAX_KIB){
+    return (value==='1024'?1024:500)*1024;
+}
+export function legacyVideoProfile(duration,sourceFps,baselineFps){
+    const historic=duration<5?20:duration>10?12:15;
+    return {fps:Math.min(30,Math.max(1,Math.floor(sourceFps)),Math.max(historic,Math.ceil(baselineFps-.01))),quality:50};
+}
+export function legacyVideoFilter(fps){
+    return 'scale=512:512:force_original_aspect_ratio=increase,crop=512:512,fps='+fps;
 }
