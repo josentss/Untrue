@@ -1,13 +1,12 @@
-// Prefer smooth motion and usable visual detail. Never silently deliver 6–8 FPS
-// from a normal high-FPS source just to meet the sticker size ceiling.
+// High-detail profiles; never resize below 192 or use 6–8 FPS to fit.
 export function videoProfiles(duration,fpsSource){
-    const floor=Math.min(12,Math.max(1,Math.floor(fpsSource)));
+    const source=Math.max(1,Math.min(30,Math.floor(fpsSource)));
     const profiles=duration>10
-        ? [[30,60,384],[30,50,256],[24,48,224],[18,45,192],[15,45,160],[12,42,128]]
+        ? [[30,72,512],[30,65,384],[24,62,320],[18,58,256],[15,55,224],[12,50,192]]
         : duration>5
-        ? [[30,65,512],[30,55,320],[24,50,256],[18,48,192],[15,45,160],[12,42,128]]
-        : [[30,80,512],[30,65,384],[24,60,256],[18,50,192],[15,45,160],[12,42,128]];
-    return profiles.map(([rate,q,size])=>[Math.min(Math.max(1,Math.floor(fpsSource)),Math.max(floor,rate)),q,size]);
+        ? [[30,76,512],[30,68,384],[24,64,320],[18,58,256],[15,55,224],[12,50,192]]
+        : [[30,85,512],[30,72,384],[24,65,320],[18,55,256],[15,55,224],[12,50,192]];
+    return profiles.map(([rate,q,size])=>[Math.min(source,rate),q,size]);
 }
 export const SAMPLE_EDGE=64,SAMPLE_BYTES=SAMPLE_EDGE*SAMPLE_EDGE*4;
 // Reduce a decoded 512px composited frame into 64px RGBA using bounded
@@ -64,7 +63,7 @@ function chunks(data,start,end){
     }
     if(start!==end)invalid();return list;
 }
-export function validateWebpTimeline(data){
+export function validateWebpTimeline(data,{independent=false}={}){
     if(!Buffer.isBuffer(data)||data.length<12||data.length>500*1024||data.toString('ascii',0,4)!=='RIFF'||data.toString('ascii',8,12)!=='WEBP'||data.readUInt32LE(4)+8!==data.length)invalid();
     const top=chunks(data,12,data.length);
     const extended=top[0],animation=top.filter(c=>c.type==='ANIM');
@@ -76,6 +75,7 @@ export function validateWebpTimeline(data){
         if(frame.size<24)invalid();
         const o=frame.offset,x=data.readUIntLE(o,3)*2,y=data.readUIntLE(o+3,3)*2,w=data.readUIntLE(o+6,3)+1,h=data.readUIntLE(o+9,3)+1,d=data.readUIntLE(o+12,3);
         if(x+w>512||y+h>512||d<10||data[o+15]&0xfc||(!index&&(x||y||w!==512||h!==512)))invalid();
+        if(independent&&(x||y||w!==512||h!==512||!(data[o+15]&2)))invalid();
         const inner=chunks(data,o+16,frame.end);
         if(inner.filter(c=>c.type==='VP8 '||c.type==='VP8L').length!==1||inner.filter(c=>c.type==='ALPH').length>1)invalid();
         durationMs+=d;

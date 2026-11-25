@@ -97,7 +97,7 @@ await withTemp(async dir=>{
     const compressed=await createSticker(complex,await sub('complex'),{kind:'video'});
     assert.ok(compressed.animated&&compressed.bytes<=LIMITS.animatedBytes&&compressed.fps>=12);
     assert.ok(Math.abs(compressed.durationMs-3000)<=100);
-    assert.deepEqual(validateWebpTimeline(await readFile(compressed.path)),{frames:compressed.frames,durationMs:compressed.durationMs});
+    assert.deepEqual(validateWebpTimeline(await readFile(compressed.path),{independent:true}),{frames:compressed.frames,durationMs:compressed.durationMs});
     const stress=join(dir,'complex-15.mp4');
     await run(ffmpeg,['-v','error','-f','lavfi','-i','testsrc2=size=320x240:rate=30','-t','15','-c:v','libx264','-pix_fmt','yuv420p','-threads','2','-y',stress],{timeout:30000});
     let stressResult;
@@ -109,6 +109,7 @@ await withTemp(async dir=>{
     await run(ffmpeg,['-v','error','-f','lavfi','-i','testsrc2=size=1920x1080:rate=30','-t','2','-c:v','libx264','-preset','fast','-pix_fmt','yuv420p','-threads','2','-y',hd],{timeout:30000});
     const hdSticker=await createSticker(hd,await sub('hd'),{kind:'video'});
     assert.ok(hdSticker.fps>=12&&hdSticker.bytes<=LIMITS.animatedBytes);
+    assert.deepEqual(validateWebpTimeline(await readFile(hdSticker.path),{independent:true}),{frames:hdSticker.frames,durationMs:hdSticker.durationMs});
     // Explicitly tagged PQ video exercises HDR -> SDR before WebP conversion.
     const hdr=join(dir,'hdr.mp4');
     await run(ffmpeg,['-v','error','-f','lavfi','-i','testsrc2=size=320x240:rate=24','-t','1','-vf','format=yuv420p10le','-c:v','libx265','-threads','2','-x265-params','pools=1:frame-threads=1:log-level=error:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc','-y',hdr],{timeout:30000});
@@ -121,6 +122,7 @@ await withTemp(async dir=>{
     const smooth15=await createSticker(simple15,await sub('smooth15'),{kind:'video'});
     assert.ok(smooth15.fps>=24&&smooth15.frames>300);
     assert.ok(smooth15.durationMs>=14800&&smooth15.durationMs<=15000);
+    assert.deepEqual(validateWebpTimeline(await readFile(smooth15.path),{independent:true}),{frames:smooth15.frames,durationMs:smooth15.durationMs});
     assert.equal(await prepareStickerAudio(simple15,await sub('silent15'),smooth15.durationMs),null);
     const smoothRecovered=await convertWebp(smooth15.path,await sub('smooth-recovered'));
     assert.ok(Number((await inspectMedia(smoothRecovered.path)).format.duration)>=14.8);
@@ -138,7 +140,7 @@ await withTemp(async dir=>{
     const lowSticker=await createSticker(lowFps,await sub('low-fps'),{kind:'video'});
     assert.ok(lowSticker.animated&&lowSticker.bytes<=LIMITS.animatedBytes);
     assert.ok(Math.abs(lowSticker.durationMs-14800)<=100);
-    assert.deepEqual(validateWebpTimeline(await readFile(lowSticker.path)),{frames:lowSticker.frames,durationMs:lowSticker.durationMs});
+    assert.deepEqual(validateWebpTimeline(await readFile(lowSticker.path),{independent:true}),{frames:lowSticker.frames,durationMs:lowSticker.durationMs});
     const lowRecovered=await convertWebp(lowSticker.path,await sub('low-fps-recovered'));
     assert.ok(Number((await inspectMedia(lowRecovered.path)).format.duration)>=14.6);
     const stationary=join(dir,'stationary.mp4');

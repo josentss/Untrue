@@ -5,7 +5,7 @@ import { stat,writeFile,readFile } from 'node:fs/promises';
 import { run } from '../core/process.js';
 import { ffmpeg,ffprobe } from '../core/config.js';
 import { MediaError } from '../core/mediaTarget.js';
-import { stationaryWebp } from '../core/stationaryWebp.js';
+import { encodeIndependentVideo } from './stickerVideoEncoder.js';
 import { videoProfiles,validateWebpTimeline,frameSample,acceptableSample,SAMPLE_BYTES,hdrConversion } from '../core/stickerQuality.js';
 
 export const LIMITS=Object.freeze({size:512,staticBytes:100*1024,animatedBytes:500*1024,durationMs:15000,frames:450,pixels:48*1024*1024,animationPixels:120*1024*1024});
@@ -81,7 +81,7 @@ function videoFilter(size,fps,crop,alpha,video) {
         ',scale=512:512:flags=bicubic,setsar=1,format=bgra';
 }
 async function verifyAnimation(path,result,end,{input,dir,video,duration,fps,crop,alpha}){
-    const timeline=validateWebpTimeline(await readFile(path));
+    const timeline=validateWebpTimeline(await readFile(path),{independent:true});
     if(timeline.frames!==result.frames||timeline.durationMs!==result.durationMs)throw new MediaError('La animación contiene una línea de tiempo inválida.');
     // Reference is decoded directly from the source at the selected FPS and
     // full spatial detail, not from the already compressed candidate.
@@ -171,24 +171,15 @@ export async function createSticker(input,dir,{kind,crop=true}={}) {
             try { timeout=remaining(end); }
             catch { lastFailure='timeout'; break; }
             try {
-                await run(ffmpeg,[...baseArgs,'-xerror',...inputArgs,'-i',input,'-map','0:'+video.index,'-t',String(duration),'-an','-vf',videoFilter(size,fps,crop,alpha,video),'-c:v','libwebp_anim','-preset','picture','-quality',String(quality),'-cr_threshold','0','-compression_level','4','-loop','0','-threads','2',encoded],{timeout});
+                const ok=await encodeIndependentVideo({
+                    args:[...baseArgs,'-xerror',...inputArgs,'-i',input,'-map','0:'+video.index,'-t',String(duration),'-an','-vf',videoFilter(size,fps,crop,alpha,video)+',format=rgba','-frames:v','450','-f','rawvideo','pipe:1'],
+                    fps,quality,durationMs:Math.round(duration*1000),output:encoded,dir,timeout
+                });
+                if(!ok){lastFailure='size';console.info('Sticker perfil supera presupuesto '+JSON.stringify({fps,quality,detail:size}));continue;}
                 const bytes=(await stat(encoded)).size;
                 smallest=Math.min(smallest,bytes);
                 const meta=await metadata(encoded);
                 animated=(meta.pages||1)>1;
-                if(!animated&&duration>=0.02&&bytes*2+1024<=LIMITS.animatedBytes){
-                    // libwebp collapses a still video to a static image. Preserve its timeline (and any audio) with two identical frames.
-                    const total=Math.round(duration*1000);
-                    // Normalize even a one-frame animated container into a truly static frame.
-                    const frame=await sharp(encoded,sharpOptions).webp({quality:Math.max(1,quality),alphaQuality:80}).toBuffer();
-                    const animation=stationaryWebp(frame,{width:512,height:512,durationMs:total,exif:stickerExif()});
-                    if(animation.length>LIMITS.animatedBytes){lastFailure='size';continue;}
-                    await writeFile(output,animation);
-                    console.info('Sticker video estacionario '+JSON.stringify({durationMs:total,bytes:animation.length}));
-                    const result=await checkSticker(output,true);
-                    if(result){await verifyAnimation(output,result,end,{input,dir,video,duration,fps,crop,alpha});return result;}
-                    lastFailure='size';continue;
-                }
                 const visual=animationInfo(meta,{candidate:true});
                 // A failed candidate must never prevent trying a smaller profile.
                 const validDuration=animated&&visual.durationMs<=LIMITS.durationMs&&Math.abs(visual.durationMs-duration*1000)<=Math.max(80,1100/fps);
@@ -206,7 +197,7 @@ export async function createSticker(input,dir,{kind,crop=true}={}) {
             }
         }
         console.warn('Sticker compresión agotada '+JSON.stringify({reason:lastFailure,attempts:attempted.size,smallestBytes:Number.isFinite(smallest)?smallest:null}));
-        throw new MediaError(lastFailure==='timeout'?'Se agotó el tiempo de compresión del sticker. Intenta con un video de menor resolución.':(lastFailure==='size'||lastFailure==='validation')?'El video no cabe en 500 KB con nitidez y fluidez suficientes. Prueba con un clip más corto.':'No se pudo convertir el video en una animación compatible. Intenta con otro video.');
+        throw new MediaError(lastFailure==='timeout'?'Se agotó el tiempo de compresión del sticker. Intenta con un video de menor resolución.':(lastFailure==='size'||lastFailure==='validation')?'El video no cabe en 500 KB con fotogramas independientes y buena calidad. Prueba con un clip más corto.':'No se pudo convertir el video en una animación compatible. Intenta con otro video.');
     } else throw new MediaError('Solo imágenes, GIF, videos o stickers WebP.');
     throw new MediaError('No se pudo comprimir el sticker dentro del límite de WhatsApp.');
 }
