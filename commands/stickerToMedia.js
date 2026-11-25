@@ -35,6 +35,6 @@ export async function stickerToMediaCommand(sock,m){
         });
     } catch(e) {
         console.warn('Conversión de sticker no completada '+JSON.stringify({stage,reason:e instanceof MediaError?'validation':'operation'}));
-        await sock.sendMessage(m.key.remoteJid,{text:e instanceof MediaError?e.message:(stage==='audio'?'No se pudo descargar el sonido del sticker. Vuelve a enviarlo y responde con #sm.':'No se pudo convertir el sticker.')},{quoted:m});
+        await sock.sendMessage(m.key.remoteJid,{text:e instanceof MediaError?e.message:(stage==='audio'?'No se pudo descargar el sonido del sticker. Vuelve a enviarlo y responde con #sm.':'No se pudo convertir el sticker.')},{quoted:m});return false;
     }
 }

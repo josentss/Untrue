@@ -6,11 +6,10 @@ export function musicQuery(m,args){
 }
 export async function musicCommand(sock,m,args,{platform,kind,command}){
     const jid=m.key.remoteJid,query=musicQuery(m,args);
-    if(!query){await sock.sendMessage(jid,{text:'Uso: #'+command+' [enlace o búsqueda]'},{quoted:m});return;}
+    if(!query){await sock.sendMessage(jid,{text:'Uso: #'+command+' [enlace o búsqueda]'},{quoted:m});return false;}
     try{
         // Validate before notifying the user that a download started.
         mediaInput(platform,query);
-        await sock.sendMessage(jid,{text:kind==='audio'?'Descargando audio…':'Descargando video…'},{quoted:m});
         await withMusicDownload(platform,kind,query,async({filePath,info,bytes,height})=>{
             const caption=info.title+'\n'+info.author+' · '+info.durationFormatted+' · '+(bytes/1048576).toFixed(2)+' MB'+(kind==='video'?' · '+height+'p':' · MP3');
             const safeName=info.title.replace(/[\\/:*?"<>|]/g,'_').slice(0,80)||'media';
@@ -25,6 +24,6 @@ export async function musicCommand(sock,m,args,{platform,kind,command}){
     }catch(error){
         const e=publicError(error);
         console.warn('Descarga fallida '+JSON.stringify({platform,kind,reason:e.code}));
-        await sock.sendMessage(jid,{text:e.message},{quoted:m});
+        await sock.sendMessage(jid,{text:e.message},{quoted:m});return false;
     }
 }

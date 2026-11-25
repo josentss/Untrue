@@ -20,7 +20,6 @@ export async function socialCommand(sock,m,args,{platform,kind,command,allowPosi
     try{
         const {query,position}=socialQuery(m,args,platform,allowPosition);
         stage='download';
-        await sock.sendMessage(jid,{text:'Descargando contenido…'},{quoted:m});
         await withSocialDownload(platform,query,{kind,position},async(item,index,total)=>{
             const content={[item.kind]:{url:item.path},mimetype:item.mime};
             if(item.kind==='video'&&Number.isSafeInteger(item.seconds))content.seconds=item.seconds;
@@ -31,6 +30,6 @@ export async function socialCommand(sock,m,args,{platform,kind,command,allowPosi
     }catch(error){
         const e=publicError(error);
         console.warn('Red social descarga fallida '+JSON.stringify({platform,kind,stage,reason:e.code}));
-        await sock.sendMessage(jid,{text:e.message},{quoted:m});
+        await sock.sendMessage(jid,{text:e.message},{quoted:m});return false;
     }
 }

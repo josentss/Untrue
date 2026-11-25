@@ -27,5 +27,5 @@ export async function traducirCommand(sock,m,args=[]){
         if(args.length<1||args.length>2)throw new UtilityError('Responde a un texto con #traducir es. Idiomas: '+Object.keys(languages).join(', ')+'. Opcional: #traducir es en (origen inglés).');
         const text=await translateText(quotedText(m),args[0].toLowerCase(),args[1]?.toLowerCase()||'auto');
         for(const part of textChunks(text))await sock.sendMessage(m.key.remoteJid,{text:part},{quoted:m});
-    }catch(e){await sock.sendMessage(m.key.remoteJid,{text:e instanceof UtilityError?e.message:'El servicio de traducción no está disponible.'},{quoted:m});}
+    }catch(e){await sock.sendMessage(m.key.remoteJid,{text:e instanceof UtilityError?e.message:'El servicio de traducción no está disponible.'},{quoted:m});return false;}
 }
