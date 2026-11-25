@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import sharp from 'sharp';
 import { join } from 'node:path';
-import { mkdir,stat } from 'node:fs/promises';
+import { mkdir,stat,readFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { withTemp,run } from '../core/process.js';
 import { ffmpeg } from '../core/config.js';
@@ -11,6 +11,7 @@ import {proto,generateWAMessageContent,generateWAMessageFromContent} from 'baile
 import {installSoundStickerCodec,soundCodecAvailable} from '../core/soundStickerCodec.js';
 import {StickerAudioCache} from '../core/stickerAudioCache.js';
 import {selectMedia} from '../core/mediaTarget.js';
+import {validateWebpTimeline} from '../core/stickerQuality.js';
 import {stationaryWebp} from '../core/stationaryWebp.js';
 import {prepareStickerAudio,uploadStickerAudio} from '../services/stickerSound.js';
 
@@ -98,6 +99,7 @@ await withTemp(async dir=>{
     assert.ok(compressed.bytes<=LIMITS.animatedBytes);
     assert.ok(compressed.durationMs>=14800&&compressed.durationMs<=15000);
     assert.ok(compressed.fps>=6);
+    assert.deepEqual(validateWebpTimeline(await readFile(compressed.path)),{frames:compressed.frames,durationMs:compressed.durationMs});
     const longClip=await prepareStickerAudio(complex,await sub('long-audio'),compressed.durationMs);
     assert.ok(longClip.durationMs>=14800&&longClip.durationMs<=15000);
     assert.equal(longClip.seconds,15);
@@ -119,6 +121,7 @@ await withTemp(async dir=>{
     const lowSticker=await createSticker(lowFps,await sub('low-fps'),{kind:'video'});
     assert.ok(lowSticker.animated&&lowSticker.bytes<=LIMITS.animatedBytes);
     assert.ok(Math.abs(lowSticker.durationMs-14800)<=100);
+    assert.deepEqual(validateWebpTimeline(await readFile(lowSticker.path)),{frames:lowSticker.frames,durationMs:lowSticker.durationMs});
     const lowRecovered=await convertWebp(lowSticker.path,await sub('low-fps-recovered'));
     assert.ok(Number((await inspectMedia(lowRecovered.path)).format.duration)>=14.6);
     const stationary=join(dir,'stationary.mp4');
